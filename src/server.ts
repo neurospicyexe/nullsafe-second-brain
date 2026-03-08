@@ -17,6 +17,14 @@ import { buildSynthesisTools } from "./tools/synthesis.js";
 import { buildSystemTools } from "./tools/system.js";
 
 export function createServer(config: SecondBrainConfig) {
+  // Guard unimplemented adapters/providers
+  if (config.vault.adapter === "obsidian-rest") {
+    throw new Error('ObsidianRESTAdapter is not yet implemented. Set vault.adapter to "filesystem".');
+  }
+  if (config.embeddings.provider === "ollama") {
+    throw new Error('OllamaEmbedder is not yet implemented. Set embeddings.provider to "openai".');
+  }
+
   const adapter = new FilesystemAdapter(config.vault.path);
 
   const dbDir = join(homedir(), ".nullsafe-second-brain");
@@ -36,13 +44,15 @@ export function createServer(config: SecondBrainConfig) {
   const halseth = new HalsethClient(config.halseth);
   const plural = new PluralClient({ enabled: config.plural.enabled, url: config.plural.mcp_url });
 
+  const heartSummaryPath = config.patterns.hearth_summary_path ?? "_recent-patterns.md";
+
   const capture = buildCaptureTools(indexer, resolver);
   const retrieval = buildRetrievalTools(store, embedder);
   const synthesis = buildSynthesisTools(
     indexer,
     halseth,
     "00 - INBOX/",
-    config.patterns.hearth_summary_path,
+    heartSummaryPath,
   );
   const system = buildSystemTools(store, indexer, adapter);
 
@@ -91,7 +101,7 @@ export function createServer(config: SecondBrainConfig) {
 
   server.tool("sb_recent_patterns",
     {},
-    () => retrieval.sb_recent_patterns({ vaultAdapter: adapter, summaryPath: config.patterns.hearth_summary_path }).then(ok));
+    () => retrieval.sb_recent_patterns({ vaultAdapter: adapter, summaryPath: heartSummaryPath }).then(ok));
 
   // System tools
   server.tool("sb_status",

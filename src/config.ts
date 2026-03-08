@@ -35,7 +35,7 @@ const configSchema = z.object({
   patterns: z.object({
     enabled: z.boolean(),
     hearth_summary: z.boolean(),
-    hearth_summary_path: z.string(),
+    hearth_summary_path: z.string().optional(),
   }),
   embeddings: z.object({
     provider: z.enum(["openai", "ollama"]),
