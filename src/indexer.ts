@@ -13,7 +13,7 @@ interface WriteOptions {
 }
 
 function chunkText(text: string, maxChars = 1000): string[] {
-  if (text.length === 0) return [""];
+  if (text.trim().length === 0) return [];
   const chunks: string[] = [];
   for (let i = 0; i < text.length; i += maxChars) {
     chunks.push(text.slice(i, i + maxChars));
@@ -44,9 +44,15 @@ export class Indexer {
   }
 
   async reindex(vaultPath: string): Promise<void> {
+    // Look up existing metadata before deleting
+    const existing = this.store.getAll().find(c => c.vault_path === vaultPath);
+    const companion = existing?.companion ?? null;
+    const content_type = (existing?.content_type ?? "note") as ContentType;
+    const tags = existing?.tags ?? [];
+
     const content = await this.adapter.read(vaultPath);
     this.store.deleteByPath(vaultPath);
-    await this.indexContent(vaultPath, content, null, "note", []);
+    await this.indexContent(vaultPath, content, companion, content_type, tags);
   }
 
   private async indexContent(
@@ -57,6 +63,7 @@ export class Indexer {
     tags: string[],
   ): Promise<void> {
     const chunks = chunkText(content);
+    if (chunks.length === 0) return;  // nothing to index
     const embeddings = await this.embedder.embedBatch(chunks);
     this.store.deleteByPath(vaultPath);
     for (let i = 0; i < chunks.length; i++) {

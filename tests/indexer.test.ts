@@ -67,6 +67,29 @@ describe("Indexer", () => {
     expect(chunks.length).toBeGreaterThan(0); // new chunks inserted
   });
 
+  it("reindex preserves companion and content_type", async () => {
+    await indexer.write({
+      path: "story.md",
+      content: "original story",
+      companion: "companion-a",
+      content_type: "document",
+      tags: ["story"],
+    });
+    // reset mock read to return updated content
+    (mockAdapter.read as ReturnType<typeof vi.fn>).mockResolvedValueOnce("updated story content");
+    await indexer.reindex("story.md");
+    const chunks = store.getAll().filter(c => c.vault_path === "story.md");
+    expect(chunks.length).toBeGreaterThan(0);
+    expect(chunks[0].companion).toBe("companion-a");
+    expect(chunks[0].content_type).toBe("document");
+    expect(chunks[0].tags).toEqual(["story"]);
+  });
+
+  it("write with empty content does not insert chunks", async () => {
+    await indexer.write({ path: "empty.md", content: "   ", companion: null, content_type: "note", tags: [] });
+    expect(store.getAll().filter(c => c.vault_path === "empty.md")).toHaveLength(0);
+  });
+
   it("chunk text is stored in vector store", async () => {
     await indexer.write({ path: "a.md", content: "hello world", companion: null, content_type: "note", tags: [] });
     const chunks = store.getAll();
