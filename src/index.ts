@@ -1,2 +1,8 @@
-// Entry point — wired in Task 14
-console.log("nullsafe-second-brain starting...");
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { loadConfig } from "./config.js";
+import { createServer } from "./server.js";
+
+const config = loadConfig();
+const { server } = createServer(config);
+const transport = new StdioServerTransport();
+await server.connect(transport);
