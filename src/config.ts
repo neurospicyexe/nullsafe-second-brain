@@ -1,6 +1,5 @@
 import { readFileSync } from "fs";
 import { z } from "zod";
-import type { SecondBrainConfig } from "./types.js";
 
 const companionSchema = z.object({
   id: z.string().min(1),
@@ -46,7 +45,22 @@ const configSchema = z.object({
   }),
 });
 
+export type SecondBrainConfig = z.infer<typeof configSchema>;
+
 export function loadConfig(path = "second-brain.config.json"): SecondBrainConfig {
-  const raw = JSON.parse(readFileSync(path, "utf-8"));
-  return configSchema.parse(raw) as SecondBrainConfig;
+  let raw: unknown;
+  try {
+    const text = readFileSync(path, "utf-8");
+    try {
+      raw = JSON.parse(text);
+    } catch (e) {
+      throw new Error(`Config file at "${path}" contains invalid JSON: ${(e as Error).message}`);
+    }
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new Error(`Config file not found at "${path}". Copy second-brain.config.example.json to second-brain.config.json and fill in your values.`);
+    }
+    throw e;
+  }
+  return configSchema.parse(raw);
 }

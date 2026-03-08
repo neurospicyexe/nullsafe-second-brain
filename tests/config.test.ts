@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { loadConfig } from "../src/config.js";
 import { writeFileSync, unlinkSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
 
 const validConfig = {
   vault: { adapter: "filesystem", path: "/tmp/vault" },
@@ -19,33 +21,49 @@ const validConfig = {
 
 describe("loadConfig", () => {
   it("loads and validates a valid config", () => {
-    writeFileSync("/tmp/test-config.json", JSON.stringify(validConfig));
-    const loaded = loadConfig("/tmp/test-config.json");
+    const tmpFile = join(tmpdir(), "test-config.json");
+    writeFileSync(tmpFile, JSON.stringify(validConfig));
+    const loaded = loadConfig(tmpFile);
     expect(loaded.vault.adapter).toBe("filesystem");
     expect(loaded.companions).toHaveLength(0);
     expect(loaded.triggers.on_demand).toBe(true);
-    unlinkSync("/tmp/test-config.json");
+    unlinkSync(tmpFile);
   });
 
   it("loads config with companions", () => {
     const cfg = { ...validConfig, companions: [{ id: "companion-a", role: "companion", vault_folder: "Companions/a/" }] };
-    writeFileSync("/tmp/test-config2.json", JSON.stringify(cfg));
-    const loaded = loadConfig("/tmp/test-config2.json");
+    const tmpFile = join(tmpdir(), "test-config2.json");
+    writeFileSync(tmpFile, JSON.stringify(cfg));
+    const loaded = loadConfig(tmpFile);
     expect(loaded.companions).toHaveLength(1);
     expect(loaded.companions[0].id).toBe("companion-a");
-    unlinkSync("/tmp/test-config2.json");
+    unlinkSync(tmpFile);
   });
 
   it("throws on invalid config", () => {
-    writeFileSync("/tmp/bad-config.json", JSON.stringify({ invalid: true }));
-    expect(() => loadConfig("/tmp/bad-config.json")).toThrow();
-    unlinkSync("/tmp/bad-config.json");
+    const tmpFile = join(tmpdir(), "bad-config.json");
+    writeFileSync(tmpFile, JSON.stringify({ invalid: true }));
+    expect(() => loadConfig(tmpFile)).toThrow();
+    unlinkSync(tmpFile);
   });
 
   it("throws when companion id is empty string", () => {
     const bad = { ...validConfig, companions: [{ id: "", role: "companion", vault_folder: "x/" }] };
-    writeFileSync("/tmp/bad2.json", JSON.stringify(bad));
-    expect(() => loadConfig("/tmp/bad2.json")).toThrow();
-    unlinkSync("/tmp/bad2.json");
+    const tmpFile = join(tmpdir(), "bad2.json");
+    writeFileSync(tmpFile, JSON.stringify(bad));
+    expect(() => loadConfig(tmpFile)).toThrow();
+    unlinkSync(tmpFile);
+  });
+
+  it("throws with helpful message when config file not found", () => {
+    expect(() => loadConfig("/tmp/does-not-exist-abc123.json"))
+      .toThrow("Config file not found");
+  });
+
+  it("throws with helpful message when config contains invalid JSON", () => {
+    const tmpFile = join(tmpdir(), "invalid-json-test.json");
+    writeFileSync(tmpFile, "{ invalid json }");
+    expect(() => loadConfig(tmpFile)).toThrow("invalid JSON");
+    unlinkSync(tmpFile);
   });
 });
