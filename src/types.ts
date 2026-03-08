@@ -1,4 +1,4 @@
-export type VaultAdapter = "filesystem" | "obsidian-rest";
+export type VaultAdapterType = "filesystem" | "obsidian-rest";
 export type ContentType = "document" | "note" | "study" | "observation" | "session_summary";
 export type CompanionRole = "companion" | "audit" | "seal" | string;
 

@@ -43,6 +43,29 @@ describe("FilesystemAdapter", () => {
   });
 
   it("throws on read of missing file", async () => {
-    await expect(adapter.read("missing.md")).rejects.toThrow();
+    await expect(adapter.read("missing.md")).rejects.toThrow(/ENOENT|no such file/i);
+  });
+
+  it("throws when path escapes vault root", async () => {
+    await expect(adapter.write({ path: "../../outside.txt", content: "x" }))
+      .rejects.toThrow("resolves outside vault root");
+  });
+
+  it("also throws on read outside vault root", async () => {
+    await expect(adapter.read("../../etc/passwd"))
+      .rejects.toThrow("resolves outside vault root");
+  });
+
+  it("list returns files in a directory", async () => {
+    await adapter.write({ path: "dir/a.md", content: "a" });
+    await adapter.write({ path: "dir/b.md", content: "b" });
+    const files = await adapter.list("dir");
+    expect(files).toContain("dir/a.md");
+    expect(files).toContain("dir/b.md");
+  });
+
+  it("list returns empty array for non-existent directory", async () => {
+    const files = await adapter.list("no-such-dir");
+    expect(files).toEqual([]);
   });
 });

@@ -1,22 +1,48 @@
-import { mkdirSync, writeFileSync, readFileSync, existsSync } from "fs";
-import { join, dirname } from "path";
+import { mkdirSync, existsSync } from "fs";
+import { readFile, writeFile, access } from "fs/promises";
+import { join, dirname, resolve, sep } from "path";
 import type { VaultAdapter, VaultWriteOptions } from "./vault-adapter.js";
 
 export class FilesystemAdapter implements VaultAdapter {
   constructor(private vaultRoot: string) {}
 
+  private safePath(relativePath: string): string {
+    const resolved = resolve(join(this.vaultRoot, relativePath));
+    const root = resolve(this.vaultRoot);
+    if (!resolved.startsWith(root + sep) && resolved !== root) {
+      throw new Error(`Path "${relativePath}" resolves outside vault root`);
+    }
+    return resolved;
+  }
+
   async write({ path, content, overwrite = true }: VaultWriteOptions): Promise<void> {
-    const fullPath = join(this.vaultRoot, path);
+    const fullPath = this.safePath(path);
     if (!overwrite && existsSync(fullPath)) return;
     mkdirSync(dirname(fullPath), { recursive: true });
-    writeFileSync(fullPath, content, "utf-8");
+    await writeFile(fullPath, content, "utf-8");
   }
 
   async read(path: string): Promise<string> {
-    return readFileSync(join(this.vaultRoot, path), "utf-8");
+    return readFile(this.safePath(path), "utf-8");
   }
 
   async exists(path: string): Promise<boolean> {
-    return existsSync(join(this.vaultRoot, path));
+    try {
+      await access(this.safePath(path));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async list(dirPath = ""): Promise<string[]> {
+    const { readdir } = await import("fs/promises");
+    const fullPath = this.safePath(dirPath || ".");
+    try {
+      const entries = await readdir(fullPath, { withFileTypes: true });
+      return entries.map(e => (dirPath ? `${dirPath}/${e.name}` : e.name));
+    } catch {
+      return [];
+    }
   }
 }
