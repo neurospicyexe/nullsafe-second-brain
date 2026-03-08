@@ -1,0 +1,7 @@
+node_modules/
+dist/
+second-brain.config.json
+*.db
+*.db-shm
+*.db-wal
+.env
