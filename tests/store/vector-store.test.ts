@@ -58,4 +58,28 @@ describe("VectorStore", () => {
     const id2 = store.insert({ vault_path: "b.md", companion: null, content_type: "note", chunk_text: "b", embedding: [], tags: [] });
     expect(id1).not.toBe(id2);
   });
+
+  it("getById returns undefined for non-existent id", () => {
+    expect(store.getById("does-not-exist")).toBeUndefined();
+  });
+
+  it("deleteByPath on non-existent path is a no-op", () => {
+    expect(() => store.deleteByPath("ghost.md")).not.toThrow();
+  });
+
+  it("insert with empty embedding and tags", () => {
+    const id = store.insert({ vault_path: "empty.md", companion: null, content_type: "note", chunk_text: "x", embedding: [], tags: [] });
+    const row = store.getById(id);
+    expect(row?.embedding).toEqual([]);
+    expect(row?.tags).toEqual([]);
+  });
+
+  it("filterByCompanion returns empty array on empty store", () => {
+    expect(store.filterByCompanion("nobody")).toEqual([]);
+    expect(store.filterByCompanion(null)).toEqual([]);
+  });
+
+  it("close does not throw", () => {
+    expect(() => store.close()).not.toThrow();
+  });
 });

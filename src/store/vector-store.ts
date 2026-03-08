@@ -84,10 +84,27 @@ export class VectorStore {
   }
 
   private deserialize(row: Record<string, unknown>): ChunkRow {
+    let embedding: number[];
+    let tags: string[];
+    try {
+      embedding = JSON.parse(row.embedding as string) as number[];
+    } catch {
+      throw new Error(`VectorStore: corrupt embedding in row ${row.id}: ${row.embedding}`);
+    }
+    try {
+      tags = JSON.parse(row.tags as string) as string[];
+    } catch {
+      throw new Error(`VectorStore: corrupt tags in row ${row.id}: ${row.tags}`);
+    }
     return {
-      ...row,
-      embedding: JSON.parse(row.embedding as string),
-      tags: JSON.parse(row.tags as string),
-    } as ChunkRow;
+      id: row.id as string,
+      vault_path: row.vault_path as string,
+      companion: row.companion as string | null,
+      content_type: row.content_type as string,
+      chunk_text: row.chunk_text as string,
+      embedding,
+      tags,
+      created_at: row.created_at as string,
+    };
   }
 }
