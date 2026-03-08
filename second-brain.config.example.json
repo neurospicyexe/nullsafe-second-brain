@@ -1,0 +1,22 @@
+{
+  "vault": { "adapter": "filesystem", "path": "/path/to/your/obsidian/vault" },
+  "obsidian_rest": { "url": "http://localhost:27123", "api_key": "" },
+  "halseth": { "url": "https://your-halseth.workers.dev", "secret": "" },
+  "plural": { "enabled": false, "mcp_url": "" },
+  "companions": [
+    { "id": "companion-a", "role": "companion", "vault_folder": "Companions/companion-a/" },
+    { "id": "companion-b", "role": "audit", "vault_folder": "Companions/companion-b/" }
+  ],
+  "triggers": {
+    "scheduled": { "enabled": false, "cron": "0 22 * * *" },
+    "on_demand": true,
+    "event_driven": { "enabled": false, "on_session_close": true, "on_handover": true }
+  },
+  "routing": [
+    { "companion": "companion-a", "type": "document", "destination": "Companions/companion-a/Creative/" },
+    { "type": "observation", "destination": "00 - INBOX/" },
+    { "type": "session_summary", "destination": "00 - INBOX/" }
+  ],
+  "patterns": { "enabled": true, "hearth_summary": true, "hearth_summary_path": "_recent-patterns.md" },
+  "embeddings": { "provider": "openai", "model": "text-embedding-3-small", "api_key": "" }
+}
