@@ -8,7 +8,7 @@ export class HalsethClient {
 
   private async get<T>(path: string): Promise<T> {
     const response = await fetch(`${this.options.url}${path}`, {
-      headers: { "x-halseth-secret": this.options.secret },
+      headers: { "Authorization": `Bearer ${this.options.secret}` },
     });
     if (!response.ok) {
       throw new Error(`Halseth request failed: ${response.statusText}`);

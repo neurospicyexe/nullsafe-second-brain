@@ -1,102 +1,157 @@
 # nullsafe-second-brain
 
-A local MCP server that acts as the Layer 2 memory system for the Nullsafe ecosystem. It reads from halseth and nullsafe-plural-v2, synthesizes content into an Obsidian vault, and maintains a SQLite vector store for semantic retrieval by companions and future local LLMs.
+A local memory server for the Nullsafe companion system. It reads session data from Halseth, synthesizes it into an [Obsidian](https://obsidian.md) vault, and maintains a searchable index so companions can retrieve memories semantically across sessions.
 
-## Prerequisites
+Runs locally on your machine (not in the cloud). Connects to Claude via the MCP protocol.
 
-- Node.js 20+
-- An Obsidian vault (with Obsidian Sync if cross-device use is wanted)
-- OpenAI API key (or configure `provider: "ollama"` for local embeddings)
-- Halseth instance running (see github.com/nanayax3/halseth)
+---
 
-## Setup
+> **⚠️ Disclaimer**
+> This project was built with AI assistance ("vibe-coded"). Security hardening has been applied to the best of our ability, but this software comes with **no warranty and no liability**. It has not undergone a professional security audit. Secrets are stored in a local config file — keep that file private. If you use it, you use it at your own risk.
+
+---
+
+## What you need before starting
+
+- [Node.js](https://nodejs.org) v20 or higher
+- [Obsidian](https://obsidian.md) with a vault already created (free)
+- An [OpenAI API key](https://platform.openai.com/api-keys) (for embeddings — the semantic search part)
+- [Halseth](https://github.com/your-username/halseth) deployed and running
+
+---
+
+## Setup — step by step
+
+### 1. Clone and install
 
 ```bash
-git clone <this-repo>
+git clone https://github.com/your-username/nullsafe-second-brain
 cd nullsafe-second-brain
 npm install
-cp second-brain.config.example.json second-brain.config.json
-# Edit second-brain.config.json — see Config Reference below
 ```
 
-## Connect to Claude Code
+### 2. Create your config file
 
-Add to your Claude Code MCP config (`~/.claude/claude_desktop_config.json` or equivalent):
+```bash
+cp second-brain.config.example.json second-brain.config.json
+```
+
+Open `second-brain.config.json` in any text editor and fill in the blanks:
+
+| Setting | What to put |
+|---------|------------|
+| `vault.path` | The full path to your Obsidian vault folder on your computer |
+| `halseth.url` | Your Halseth URL, e.g. `https://halseth.your-account.workers.dev` |
+| `halseth.secret` | Your Halseth `ADMIN_SECRET` passphrase |
+| `embeddings.api_key` | Your OpenAI API key |
+| `companions[].id` | The companion IDs from your Halseth setup (e.g. `drevan`, `cypher`, `gaia`) |
+
+> `second-brain.config.json` is gitignored — it will never be pushed to GitHub.
+
+**Example vault path:**
+- Mac: `/Users/yourname/Documents/MyVault`
+- Windows: `C:/Users/yourname/Documents/MyVault`
+
+### 3. Build
+
+```bash
+npm run build
+```
+
+This compiles the TypeScript to `dist/`. Only needs to be done once (and again after any code changes).
+
+### 4. Connect to Claude
+
+Open your Claude Desktop config file:
+- **Mac:** `~/.claude/claude_desktop_config.json`
+- **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
+
+Add this (replace the path with the actual path to your cloned folder):
 
 ```json
 {
   "mcpServers": {
     "second-brain": {
       "command": "node",
-      "args": ["/path/to/nullsafe-second-brain/dist/index.js"],
-      "env": {}
+      "args": ["C:/path/to/nullsafe-second-brain/dist/index.js"]
     }
   }
 }
 ```
 
-Build first: `npm run build`
+Restart Claude Desktop. You should see the `sb_` tools available.
 
-Or use `tsx` for development: replace `"node"` with `"npx"` and `args` with `["tsx", "/path/to/nullsafe-second-brain/src/index.ts"]`.
+### 5. Verify it's working
 
-## Config Reference
+In a Claude session, ask:
 
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
-| `vault.adapter` | `"filesystem"` \| `"obsidian-rest"` | — | How to write to the vault |
-| `vault.path` | string | — | Absolute path to your Obsidian vault |
-| `halseth.url` | string | — | Your halseth worker URL |
-| `halseth.secret` | string | — | HALSETH_SECRET value |
-| `plural.enabled` | boolean | `false` | Enable SimplyPlural front state queries |
-| `companions` | array | `[]` | See Companion Setup below |
-| `triggers.on_demand` | boolean | `true` | Allow manual tool calls |
-| `triggers.scheduled.enabled` | boolean | `false` | Run synthesis on a cron schedule |
-| `triggers.scheduled.cron` | string | `"0 22 * * *"` | Cron expression for scheduled runs |
-| `embeddings.provider` | `"openai"` \| `"ollama"` | — | Embedding backend |
-| `embeddings.model` | string | — | Model name (e.g. `text-embedding-3-small`) |
-| `embeddings.api_key` | string | — | OpenAI API key (if provider is openai) |
+> "What's the status of the second brain?"
 
-## Companion Setup
+Claude will call `sb_status` and tell you how many notes are indexed. If it's your first time, it'll say 0 — that's fine, it fills up as you use it.
 
-Each companion gets its own vault folder and vector store namespace. No companion names are hardcoded — everything is driven by config.
+---
 
-```json
-{
-  "companions": [
-    {
-      "id": "your-companion-id",
-      "role": "companion",
-      "vault_folder": "Companions/your-companion-id/"
-    }
-  ],
-  "routing": [
-    { "companion": "your-companion-id", "type": "document", "destination": "Companions/your-companion-id/Creative/" }
-  ]
-}
-```
+## What Claude can do with this
 
-## Available Tools
+**Saving things:**
 
-| Tool | Description |
+| Tool | What it does |
 |------|-------------|
-| `sb_save_document` | Full verbatim copy — no summarization. For stories, creative work, long-form artifacts. |
-| `sb_save_note` | Synthesized note routed to a configured folder. |
-| `sb_save_study` | Learning content filed under a subject folder. |
-| `sb_log_observation` | Pattern observation — always lands in INBOX for review. |
-| `sb_synthesize_session` | Pull a halseth session and write a summary note. |
-| `sb_run_patterns` | Analyze recent halseth data and write observation notes. |
-| `sb_write_pattern_summary` | Generate `_recent-patterns.md` for the Hearth dashboard widget. |
-| `sb_search` | Semantic search across the full vault index. |
-| `sb_recall` | Filtered retrieval by companion lane, content type, or date. |
-| `sb_recent_patterns` | Return the pre-computed pattern summary. |
-| `sb_status` | Index health, chunk count, companions indexed. |
-| `sb_reindex_note` | Re-embed a single note after manual edits. |
-| `sb_index_rebuild` | Rebuild index for a list of paths. |
+| `sb_save_document` | Save a full document (stories, creative work, long-form artifacts) |
+| `sb_save_note` | Save a synthesized note, routed to the right companion folder |
+| `sb_save_study` | Save learning content to a subject folder |
+| `sb_log_observation` | Log a pattern observation to your INBOX for review |
+
+**Finding things:**
+
+| Tool | What it does |
+|------|-------------|
+| `sb_search` | Search your vault by meaning (not just keywords) |
+| `sb_recall` | Filter memories by companion, content type, or date |
+| `sb_recent_patterns` | Return the latest pattern summary |
+
+**Synthesis (pulls from Halseth):**
+
+| Tool | What it does |
+|------|-------------|
+| `sb_synthesize_session` | Pull a Halseth session and write a summary note to the vault |
+| `sb_run_patterns` | Analyze recent Halseth data and write observation notes |
+| `sb_write_pattern_summary` | Generate a `_recent-patterns.md` for the Hearth dashboard |
+
+**Maintenance:**
+
+| Tool | What it does |
+|------|-------------|
+| `sb_status` | Check how many notes are indexed and which companions have data |
+| `sb_reindex_note` | Re-embed a note after you've manually edited it |
+| `sb_index_rebuild` | Rebuild the index for a list of vault paths |
+
+---
+
+## Where files live
+
+| File | Location | Notes |
+|------|----------|-------|
+| Config | `second-brain.config.json` | In the project folder. Gitignored. Keep it private. |
+| Vector database | `~/.nullsafe-second-brain/vector-store.db` | Outside your vault so Obsidian Sync doesn't try to sync it. |
+| Vault notes | Your Obsidian vault | Written by the server, readable in Obsidian normally. |
+
+---
 
 ## Development
 
 ```bash
-npm test          # run all tests
-npm run dev       # start server (requires second-brain.config.json)
-npm run build     # compile to dist/
+npm run dev    # run without building (uses tsx, slower start)
+npm test       # run tests
+npm run build  # compile to dist/
 ```
+
+---
+
+## Part of a suite
+
+| Project | What it does |
+|---------|-------------|
+| [Halseth](https://github.com/your-username/halseth) | The data backend this reads from |
+| [Hearth](https://github.com/your-username/hearth) | Visual dashboard (reads `_recent-patterns.md` this generates) |
+| [nullsafe-plural-v2](https://github.com/your-username/nullsafe-plural-v2) | SimplyPlural fronting integration |
