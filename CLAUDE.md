@@ -84,15 +84,16 @@ Mobile / Desktop / any device (all sync directly to VPS)
 - [ ] All devices pointed at your CouchDB domain with vault db credentials
 
 **Second-brain deployment**
-- [ ] Node.js installed (via nvm)
-- [ ] Repo cloned to VPS, `npm install`, `npm run build`
-- [ ] `second-brain.config.json` created on VPS (`chmod 600`)
-- [ ] Vault folder path in config matches where LiveSync materializes files on VPS
-- [ ] second-brain running as a `systemd` service (auto-restart on reboot)
+- [x] Node.js installed (via nvm)
+- [x] Repo cloned to VPS, `npm install`, `npm run build`
+- [x] `second-brain.config.json` created on VPS (`chmod 600`)
+- [x] CouchDBAdapter writes directly to CouchDB in LiveSync format — no vault path needed
+- [x] second-brain running as a `systemd` service (auto-restart on reboot)
+- [x] HTTP MCP transport live at `https://mcp.softcrashentity.com/mcp`
+- [x] OAuth working — Claude.ai connected successfully
 
 **Verify**
-- [ ] Write a note on mobile → appears in vault on VPS within seconds
-- [ ] second-brain writes a file → appears on mobile Obsidian within seconds
+- [ ] second-brain writes a file → appears in Obsidian on devices within seconds
 - [ ] Reboot VPS → second-brain and CouchDB both come back automatically
 
 ### Systemd Service
