@@ -6,8 +6,10 @@
   "type": "module",
   "scripts": {
     "dev": "tsx src/index.ts",
+    "dev:http": "tsx src/index-http.ts",
     "build": "tsc",
     "start": "node dist/index.js",
+    "start:http": "node dist/index-http.js",
     "test": "vitest run",
     "test:watch": "vitest"
   },

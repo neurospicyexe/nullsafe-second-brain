@@ -2,15 +2,19 @@ import { describe, it, expect } from "vitest";
 import { loadConfig } from "../config.js";
 import { writeFileSync, unlinkSync } from "fs";
 import { join } from "path";
+import { tmpdir } from "os";
+import { randomUUID } from "crypto";
 
-const tmpPath = join(process.cwd(), "test-config-tmp.json");
-
-function writeConfig(obj: unknown) {
-  writeFileSync(tmpPath, JSON.stringify(obj), "utf-8");
+function makeTmp() {
+  return join(tmpdir(), `second-brain-test-${randomUUID()}.json`);
 }
 
-function cleanup() {
-  try { unlinkSync(tmpPath); } catch {}
+function writeConfig(obj: unknown, path: string) {
+  writeFileSync(path, JSON.stringify(obj), "utf-8");
+}
+
+function cleanup(path: string) {
+  try { unlinkSync(path); } catch {}
 }
 
 const baseConfig = {
@@ -30,45 +34,45 @@ const baseConfig = {
 
 describe("loadConfig - http block", () => {
   it("loads config without http block (http is optional)", () => {
-    writeConfig(baseConfig);
-    const config = loadConfig(tmpPath);
+    const p = makeTmp(); writeConfig(baseConfig, p);
+    const config = loadConfig(p);
     expect(config.http).toBeUndefined();
-    cleanup();
+    cleanup(p);
   });
 
   it("loads config with http block", () => {
-    writeConfig({ ...baseConfig, http: { port: 3001, api_key: "secret" } });
-    const config = loadConfig(tmpPath);
+    const p = makeTmp(); writeConfig({ ...baseConfig, http: { port: 3001, api_key: "secret" } }, p);
+    const config = loadConfig(p);
     expect(config.http?.port).toBe(3001);
     expect(config.http?.api_key).toBe("secret");
-    cleanup();
+    cleanup(p);
   });
 
   it("rejects http block with invalid port", () => {
-    writeConfig({ ...baseConfig, http: { port: "not-a-number", api_key: "secret" } });
-    expect(() => loadConfig(tmpPath)).toThrow();
-    cleanup();
+    const p = makeTmp(); writeConfig({ ...baseConfig, http: { port: "not-a-number", api_key: "secret" } }, p);
+    expect(() => loadConfig(p)).toThrow();
+    cleanup(p);
   });
 });
 
 describe("loadConfig - couchdb block", () => {
   it("loads config without couchdb block (optional)", () => {
-    writeConfig(baseConfig);
-    const config = loadConfig(tmpPath);
+    const p = makeTmp(); writeConfig(baseConfig, p);
+    const config = loadConfig(p);
     expect(config.couchdb).toBeUndefined();
-    cleanup();
+    cleanup(p);
   });
 
   it("loads config with couchdb block", () => {
-    writeConfig({ ...baseConfig, couchdb: { url: "http://localhost:5984", db: "obsidian-vault", username: "admin", password: "pass" } });
-    const config = loadConfig(tmpPath);
+    const p = makeTmp(); writeConfig({ ...baseConfig, couchdb: { url: "http://localhost:5984", db: "obsidian-vault", username: "admin", password: "pass" } }, p);
+    const config = loadConfig(p);
     expect(config.couchdb?.db).toBe("obsidian-vault");
-    cleanup();
+    cleanup(p);
   });
 
   it("rejects couchdb block with missing url", () => {
-    writeConfig({ ...baseConfig, couchdb: { db: "obsidian-vault", username: "admin", password: "pass" } });
-    expect(() => loadConfig(tmpPath)).toThrow();
-    cleanup();
+    const p = makeTmp(); writeConfig({ ...baseConfig, couchdb: { db: "obsidian-vault", username: "admin", password: "pass" } }, p);
+    expect(() => loadConfig(p)).toThrow();
+    cleanup(p);
   });
 });
