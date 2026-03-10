@@ -106,6 +106,7 @@ export class SingleUserOAuthProvider implements OAuthServerProvider {
       token,
       clientId: "claude-ai",
       scopes: [],
+      expiresAt: Math.floor(Date.now() / 1000) + 365 * 24 * 60 * 60, // 1 year
     };
   }
 }
