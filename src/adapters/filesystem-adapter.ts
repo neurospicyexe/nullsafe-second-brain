@@ -1,16 +1,17 @@
 import { mkdirSync, existsSync } from "fs";
 import { readFile, writeFile, access } from "fs/promises";
-import { join, dirname, resolve, sep } from "path";
+import { join, dirname, resolve, relative, isAbsolute } from "path";
 import type { VaultAdapter, VaultWriteOptions } from "./vault-adapter.js";
 
 export class FilesystemAdapter implements VaultAdapter {
   constructor(private vaultRoot: string) {}
 
   private safePath(relativePath: string): string {
-    const resolved = resolve(join(this.vaultRoot, relativePath));
     const root = resolve(this.vaultRoot);
-    if (!resolved.startsWith(root + sep) && resolved !== root) {
-      throw new Error(`Path "${relativePath}" resolves outside vault root`);
+    const resolved = resolve(join(root, relativePath));
+    const rel = relative(root, resolved);
+    if (rel.startsWith("..") || isAbsolute(rel)) {
+      throw new Error(`Path resolves outside vault root`);
     }
     return resolved;
   }
