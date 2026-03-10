@@ -1,4 +1,5 @@
 import express from "express";
+import { createServer as createHttpServer } from "http";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { randomUUID } from "crypto";
 import { loadConfig } from "./config.js";
@@ -74,6 +75,7 @@ app.delete("/mcp", async (req, res) => {
   res.status(200).json({ ok: true });
 });
 
-app.listen(port, "127.0.0.1", () => {
+const httpServer = createHttpServer(app);
+httpServer.listen(port, "127.0.0.1", () => {
   console.error(`second-brain HTTP MCP server listening on 127.0.0.1:${port}`);
 });
