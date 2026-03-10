@@ -66,77 +66,80 @@ export function createServer(config: SecondBrainConfig) {
   );
   const system = buildSystemTools(store, indexer, adapter);
 
-  const server = new McpServer({ name: "nullsafe-second-brain", version: "0.1.0" });
+  function makeMcpServer() {
+    const server = new McpServer({ name: "nullsafe-second-brain", version: "0.1.0" });
+    const ok = (data: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(data) }] });
 
-  const ok = (data: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(data) }] });
+    // Capture tools
+    server.tool("sb_save_document",
+      { content: z.string().max(MAX_CONTENT_LENGTH), path: z.string().optional(), companion: z.string().optional(), tags: z.array(z.string()).max(50).optional() },
+      (args) => capture.sb_save_document(args).then(ok));
 
-  // Capture tools
-  server.tool("sb_save_document",
-    { content: z.string().max(MAX_CONTENT_LENGTH), path: z.string().optional(), companion: z.string().optional(), tags: z.array(z.string()).max(50).optional() },
-    (args) => capture.sb_save_document(args).then(ok));
+    server.tool("sb_save_note",
+      { content: z.string().max(MAX_CONTENT_LENGTH), path: z.string().optional(), companion: z.string().optional(), tags: z.array(z.string()).max(50).optional() },
+      (args) => capture.sb_save_note(args).then(ok));
 
-  server.tool("sb_save_note",
-    { content: z.string().max(MAX_CONTENT_LENGTH), path: z.string().optional(), companion: z.string().optional(), tags: z.array(z.string()).max(50).optional() },
-    (args) => capture.sb_save_note(args).then(ok));
+    server.tool("sb_save_study",
+      { content: z.string().max(MAX_CONTENT_LENGTH), subject: z.string().optional(), tags: z.array(z.string()).max(50).optional() },
+      (args) => capture.sb_save_study(args).then(ok));
 
-  server.tool("sb_save_study",
-    { content: z.string().max(MAX_CONTENT_LENGTH), subject: z.string().optional(), tags: z.array(z.string()).max(50).optional() },
-    (args) => capture.sb_save_study(args).then(ok));
+    server.tool("sb_log_observation",
+      { content: z.string().max(MAX_CONTENT_LENGTH), tags: z.array(z.string()).max(50).optional() },
+      (args) => capture.sb_log_observation(args).then(ok));
 
-  server.tool("sb_log_observation",
-    { content: z.string().max(MAX_CONTENT_LENGTH), tags: z.array(z.string()).max(50).optional() },
-    (args) => capture.sb_log_observation(args).then(ok));
+    // Synthesis tools
+    server.tool("sb_synthesize_session",
+      { session_id: z.string() },
+      (args) => synthesis.sb_synthesize_session(args).then(ok));
 
-  // Synthesis tools
-  server.tool("sb_synthesize_session",
-    { session_id: z.string() },
-    (args) => synthesis.sb_synthesize_session(args).then(ok));
+    server.tool("sb_run_patterns",
+      {},
+      () => synthesis.sb_run_patterns().then(ok));
 
-  server.tool("sb_run_patterns",
-    {},
-    () => synthesis.sb_run_patterns().then(ok));
+    server.tool("sb_write_pattern_summary",
+      {},
+      () => synthesis.sb_write_pattern_summary().then(ok));
 
-  server.tool("sb_write_pattern_summary",
-    {},
-    () => synthesis.sb_write_pattern_summary().then(ok));
+    // Retrieval tools
+    server.tool("sb_search",
+      { query: z.string(), limit: z.number().optional() },
+      (args) => retrieval.sb_search(args).then(ok));
 
-  // Retrieval tools
-  server.tool("sb_search",
-    { query: z.string(), limit: z.number().optional() },
-    (args) => retrieval.sb_search(args).then(ok));
+    server.tool("sb_recall",
+      { companion: z.string().nullable(), content_type: z.string().optional(), limit: z.number().optional() },
+      (args) => retrieval.sb_recall(args).then(ok));
 
-  server.tool("sb_recall",
-    { companion: z.string().nullable(), content_type: z.string().optional(), limit: z.number().optional() },
-    (args) => retrieval.sb_recall(args).then(ok));
+    server.tool("sb_recent_patterns",
+      {},
+      () => retrieval.sb_recent_patterns({ vaultAdapter: adapter, summaryPath: heartSummaryPath }).then(ok));
 
-  server.tool("sb_recent_patterns",
-    {},
-    () => retrieval.sb_recent_patterns({ vaultAdapter: adapter, summaryPath: heartSummaryPath }).then(ok));
+    // System tools
+    server.tool("sb_status",
+      {},
+      () => system.sb_status().then(ok));
 
-  // System tools
-  server.tool("sb_status",
-    {},
-    () => system.sb_status().then(ok));
+    server.tool("sb_reindex_note",
+      { path: z.string() },
+      (args) => system.sb_reindex_note(args).then(ok));
 
-  server.tool("sb_reindex_note",
-    { path: z.string() },
-    (args) => system.sb_reindex_note(args).then(ok));
+    server.tool("sb_index_rebuild",
+      { paths: z.array(z.string()) },
+      (args) => system.sb_index_rebuild(args).then(ok));
 
-  server.tool("sb_index_rebuild",
-    { paths: z.array(z.string()) },
-    (args) => system.sb_index_rebuild(args).then(ok));
+    server.tool("sb_read",
+      { path: z.string() },
+      (args) => system.sb_read(args).then(ok));
 
-  server.tool("sb_read",
-    { path: z.string() },
-    (args) => system.sb_read(args).then(ok));
+    server.tool("sb_list",
+      { path: z.string().optional() },
+      (args) => system.sb_list(args).then(ok));
 
-  server.tool("sb_list",
-    { path: z.string().optional() },
-    (args) => system.sb_list(args).then(ok));
+    server.tool("sb_move",
+      { from: z.string(), to: z.string() },
+      (args) => system.sb_move(args).then(ok));
 
-  server.tool("sb_move",
-    { from: z.string(), to: z.string() },
-    (args) => system.sb_move(args).then(ok));
+    return server;
+  }
 
-  return { server, synthesis, adapter, store };
+  return { makeMcpServer, synthesis, adapter, store };
 }

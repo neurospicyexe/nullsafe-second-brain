@@ -1,4 +1,5 @@
 import express from "express";
+import { createServer as createHttpServer } from "http";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { randomUUID } from "crypto";
 import { loadConfig } from "./config.js";
@@ -12,7 +13,7 @@ if (!config.http) {
   throw new Error('HTTP transport requires an "http" block in second-brain.config.json (port + api_key).');
 }
 
-const { server, synthesis } = createServer(config);
+const { makeMcpServer, synthesis } = createServer(config);
 setupTriggers(config, synthesis);
 
 const { port, api_key } = config.http;
@@ -44,7 +45,7 @@ app.post("/mcp", async (req, res) => {
     transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => randomUUID(),
     });
-    await server.connect(transport);
+    await makeMcpServer().connect(transport);
     if (transport.sessionId) {
       sessions.set(transport.sessionId, transport);
       transport.onclose = () => sessions.delete(transport.sessionId!);
@@ -74,6 +75,7 @@ app.delete("/mcp", async (req, res) => {
   res.status(200).json({ ok: true });
 });
 
-app.listen(port, "127.0.0.1", () => {
+const httpServer = createHttpServer(app);
+httpServer.listen(port, "127.0.0.1", () => {
   console.error(`second-brain HTTP MCP server listening on 127.0.0.1:${port}`);
 });
