@@ -5,6 +5,7 @@ import { join } from "path";
 import { mkdirSync } from "fs";
 import type { SecondBrainConfig } from "./config.js";
 import { FilesystemAdapter } from "./adapters/filesystem-adapter.js";
+import { CouchDBAdapter } from "./adapters/couchdb-adapter.js";
 import { VectorStore } from "./store/vector-store.js";
 import { OpenAIEmbedder } from "./embeddings/openai-embedder.js";
 import { Indexer } from "./indexer.js";
@@ -27,7 +28,9 @@ export function createServer(config: SecondBrainConfig) {
     throw new Error('OllamaEmbedder is not yet implemented. Set embeddings.provider to "openai".');
   }
 
-  const adapter = new FilesystemAdapter(config.vault.path);
+  const adapter = config.couchdb
+    ? new CouchDBAdapter(config.couchdb)
+    : new FilesystemAdapter(config.vault.path);
 
   const dbDir = join(homedir(), ".nullsafe-second-brain");
   mkdirSync(dbDir, { recursive: true });
@@ -48,12 +51,17 @@ export function createServer(config: SecondBrainConfig) {
 
   const heartSummaryPath = config.patterns.hearth_summary_path ?? "_recent-patterns.md";
 
+  const sessionDestination =
+    config.routing.find(r => r.type === "session_summary")?.destination ??
+    config.routing.find(r => r.type === "observation")?.destination ??
+    "raziel/";
+
   const capture = buildCaptureTools(indexer, resolver);
   const retrieval = buildRetrievalTools(store, embedder);
   const synthesis = buildSynthesisTools(
     indexer,
     halseth,
-    "00 - INBOX/",
+    sessionDestination,
     heartSummaryPath,
   );
   const system = buildSystemTools(store, indexer, adapter);
@@ -117,6 +125,18 @@ export function createServer(config: SecondBrainConfig) {
   server.tool("sb_index_rebuild",
     { paths: z.array(z.string()) },
     (args) => system.sb_index_rebuild(args).then(ok));
+
+  server.tool("sb_read",
+    { path: z.string() },
+    (args) => system.sb_read(args).then(ok));
+
+  server.tool("sb_list",
+    { path: z.string().optional() },
+    (args) => system.sb_list(args).then(ok));
+
+  server.tool("sb_move",
+    { from: z.string(), to: z.string() },
+    (args) => system.sb_move(args).then(ok));
 
   return { server, synthesis, adapter, store };
 }
