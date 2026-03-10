@@ -16,6 +16,8 @@ import { buildRetrievalTools } from "./tools/retrieval.js";
 import { buildSynthesisTools } from "./tools/synthesis.js";
 import { buildSystemTools } from "./tools/system.js";
 
+const MAX_CONTENT_LENGTH = 1_000_000; // ~1 MB of text — change freely
+
 export function createServer(config: SecondBrainConfig) {
   // Guard unimplemented adapters/providers
   if (config.vault.adapter === "obsidian-rest") {
@@ -62,19 +64,19 @@ export function createServer(config: SecondBrainConfig) {
 
   // Capture tools
   server.tool("sb_save_document",
-    { content: z.string(), path: z.string().optional(), companion: z.string().optional(), tags: z.array(z.string()).optional() },
+    { content: z.string().max(MAX_CONTENT_LENGTH), path: z.string().optional(), companion: z.string().optional(), tags: z.array(z.string()).max(50).optional() },
     (args) => capture.sb_save_document(args).then(ok));
 
   server.tool("sb_save_note",
-    { content: z.string(), path: z.string().optional(), companion: z.string().optional(), tags: z.array(z.string()).optional() },
+    { content: z.string().max(MAX_CONTENT_LENGTH), path: z.string().optional(), companion: z.string().optional(), tags: z.array(z.string()).max(50).optional() },
     (args) => capture.sb_save_note(args).then(ok));
 
   server.tool("sb_save_study",
-    { content: z.string(), subject: z.string().optional(), tags: z.array(z.string()).optional() },
+    { content: z.string().max(MAX_CONTENT_LENGTH), subject: z.string().optional(), tags: z.array(z.string()).max(50).optional() },
     (args) => capture.sb_save_study(args).then(ok));
 
   server.tool("sb_log_observation",
-    { content: z.string(), tags: z.array(z.string()).optional() },
+    { content: z.string().max(MAX_CONTENT_LENGTH), tags: z.array(z.string()).max(50).optional() },
     (args) => capture.sb_log_observation(args).then(ok));
 
   // Synthesis tools

@@ -48,3 +48,21 @@ src/
 |------|-----|---------|
 | `second-brain.config.example.json` | committed | Structure with placeholder values |
 | `second-brain.config.json` | gitignored | Your actual config — vault path, companion ids, API keys |
+
+## Security
+
+Full OWASP + vibesec audit run 2026-03-09. No fixes applied yet.
+
+**Status: This server has never been launched.** Before first launch, verify:
+1. `second-brain.config.json` was created and filled in from the example
+2. The `halseth.secret` in config equals `ADMIN_SECRET` in the halseth Cloudflare Worker
+3. The auth header fix is already in place: `src/clients/halseth-client.ts` sends `Authorization: Bearer` (not `x-halseth-secret`) — this was applied 2026-03-09 as part of the suite security pass
+
+| Severity | Location | Issue |
+|----------|----------|-------|
+| **Medium** | `second-brain.config.json` (runtime) | Config file stores `halseth.secret`, `obsidian_rest.api_key`, and `embeddings.api_key` in plaintext JSON. Fix: restrict file permissions to owner-only (`chmod 600`). Consider moving secrets to env vars instead. |
+| **Medium** | `src/tools/synthesis.ts` | Halseth session data (`front_state`, `notes`, `emotional_frequency`, etc.) is embedded directly into vault markdown without sanitization — prompt injection pathway from Halseth → vault → RAG → Claude context. Fix: HTML/markdown-escape string values from external HTTP responses before embedding in vault. |
+| **Medium** | `src/clients/halseth-client.ts`, `src/clients/plural-client.ts`, `src/embeddings/openai-embedder.ts` | No schema validation on HTTP responses — responses cast directly to expected types with no Zod check. A malformed response is processed silently. Also: no `AbortSignal` / timeout on any fetch call — server can hang indefinitely if halseth is slow. |
+| **Medium** | `src/tools/capture.ts` | User-supplied `path` and `subject` params are not length-clamped before being passed to `safePath()`. `safePath()` catches traversal, but unbounded strings could hit OS path length limits. Fix: add `.max(256)` to `path` and `subject` Zod schemas in `server.ts`. |
+| **Low** | `src/server.ts:33` | `mkdirSync(dbDir)` called without `mode` argument — directory inherits umask. Fix: `mkdirSync(dbDir, { recursive: true, mode: 0o700 })` to restrict to owner. |
+| **Low** | `src/store/vector-store.ts` | SQLite vector store is unencrypted on disk. All indexed companion content is readable by any process with filesystem access. Acceptable for local use, but document that the DB should live on an encrypted volume. |
