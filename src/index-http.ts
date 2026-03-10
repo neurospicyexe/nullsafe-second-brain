@@ -1,11 +1,13 @@
 import express from "express";
 import { createServer as createHttpServer } from "http";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { mcpAuthRouter } from "@modelcontextprotocol/sdk/server/auth/router.js";
+import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
 import { randomUUID } from "crypto";
 import { loadConfig } from "./config.js";
 import { createServer } from "./server.js";
 import { setupTriggers } from "./triggers.js";
-import { checkApiKey } from "./http-auth.js";
+import { SingleUserOAuthProvider } from "./oauth-provider.js";
 
 const config = loadConfig();
 
@@ -17,18 +19,18 @@ const { makeMcpServer, synthesis } = createServer(config);
 setupTriggers(config, synthesis);
 
 const { port, api_key } = config.http;
+const issuerUrl = new URL("https://mcp.softcrashentity.com");
+
+const oauthProvider = new SingleUserOAuthProvider(api_key);
 
 const app = express();
 app.use(express.json());
 
-// Auth middleware — runs before all /mcp routes
-app.use("/mcp", (req, res, next) => {
-  if (!checkApiKey(req.headers.authorization, api_key)) {
-    res.status(401).json({ error: "Unauthorized" });
-    return;
-  }
-  next();
-});
+// OAuth endpoints — must be installed at root
+app.use(mcpAuthRouter({ provider: oauthProvider, issuerUrl }));
+
+// Bearer auth guard for MCP endpoint
+app.use("/mcp", requireBearerAuth({ verifier: oauthProvider }));
 
 // Session registry for stateful transport
 const sessions = new Map<string, StreamableHTTPServerTransport>();
