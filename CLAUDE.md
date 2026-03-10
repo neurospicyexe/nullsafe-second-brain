@@ -51,19 +51,19 @@ src/
 
 ## VPS Deployment Plan
 
-**Goal:** Move second-brain from local Windows to an Ubuntu VPS so it runs 24/7.
+**Goal:** Move second-brain from local to an Ubuntu VPS so it runs 24/7.
 
 ### Sync Architecture
 
 ```
 VPS (second-brain runs here, writes vault files)
     ↕  Obsidian LiveSync via CouchDB (also on VPS)
-iPhone / iPad / Windows PC / any device (all sync directly to VPS)
+Mobile / Desktop / any device (all sync directly to VPS)
 ```
 
-- **No PC dependency.** All devices sync directly to CouchDB on the VPS.
-- Works when laptop is closed, asleep, or away from home.
-- **Obsidian LiveSync** plugin replaces Obsidian Sync on all devices — cancel Obsidian Sync subscription once LiveSync is confirmed working.
+- **No local machine dependency.** All devices sync directly to CouchDB on the VPS.
+- Works when your laptop is closed, asleep, or away.
+- **Obsidian LiveSync** plugin replaces Obsidian Sync on all devices.
 - The SQLite vector store (`~/.nullsafe-second-brain/vector-store.db`) stays local to the VPS only — excluded from vault sync.
 - CouchDB runs on the VPS alongside second-brain, ideally behind a reverse proxy (Caddy recommended) with HTTPS.
 
@@ -71,17 +71,17 @@ iPhone / iPad / Windows PC / any device (all sync directly to VPS)
 
 **Server hardening**
 - [ ] SSH key-based auth working (password auth disabled)
-- [ ] Non-root user created (e.g. `nullsafe`)
+- [ ] Non-root user created
 - [ ] UFW firewall enabled (allow 22, 80, 443 only)
 
 **CouchDB + LiveSync**
-- [x] CouchDB installed (`apt install couchdb`, single-node mode)
-- [x] CouchDB admin password set, bound to localhost only
-- [x] Caddy installed as reverse proxy (handles HTTPS automatically via Let's Encrypt)
-- [x] Caddy proxies `https://db.softcrashentity.com` → `localhost:5984`
-- [x] CouchDB database created for vault (`obsidian-vault`)
-- [x] LiveSync plugin installed in Obsidian on every device (iPhone, iPad, Windows) ← Windows done, iPhone/iPad remaining
-- [ ] All devices pointed at `https://db.softcrashentity.com` with vault db credentials ← Windows done, iPhone/iPad remaining
+- [ ] CouchDB installed (`apt install couchdb`, single-node mode)
+- [ ] CouchDB admin password set, bound to localhost only
+- [ ] Caddy installed as reverse proxy (handles HTTPS automatically via Let's Encrypt)
+- [ ] Caddy proxies `https://<your-couchdb-domain>` → `localhost:5984`
+- [ ] CouchDB database created for vault
+- [ ] LiveSync plugin installed in Obsidian on every device
+- [ ] All devices pointed at your CouchDB domain with vault db credentials
 
 **Second-brain deployment**
 - [ ] Node.js installed (via nvm)
@@ -91,8 +91,8 @@ iPhone / iPad / Windows PC / any device (all sync directly to VPS)
 - [ ] second-brain running as a `systemd` service (auto-restart on reboot)
 
 **Verify**
-- [ ] Write a note on iPhone → appears in vault on VPS within seconds
-- [ ] second-brain writes a file → appears on iPhone Obsidian within seconds
+- [ ] Write a note on mobile → appears in vault on VPS within seconds
+- [ ] second-brain writes a file → appears on mobile Obsidian within seconds
 - [ ] Reboot VPS → second-brain and CouchDB both come back automatically
 
 ### Systemd Service
@@ -105,8 +105,8 @@ After=network.target
 
 [Service]
 Type=simple
-User=nullsafe
-WorkingDirectory=/home/nullsafe/nullsafe-second-brain
+User=<your-vps-user>
+WorkingDirectory=/home/<your-vps-user>/nullsafe-second-brain
 ExecStart=/usr/bin/node dist/index.js
 Restart=on-failure
 RestartSec=5
@@ -129,7 +129,7 @@ Full OWASP + vibesec audit run 2026-03-09. No fixes applied yet.
 | Severity | Location | Issue |
 |----------|----------|-------|
 | **Medium** | `second-brain.config.json` (runtime) | Config file stores `halseth.secret`, `obsidian_rest.api_key`, and `embeddings.api_key` in plaintext JSON. Fix: restrict file permissions to owner-only (`chmod 600`). Consider moving secrets to env vars instead. |
-| **Medium** | `src/tools/synthesis.ts` | Halseth session data (`front_state`, `notes`, `emotional_frequency`, etc.) is embedded directly into vault markdown without sanitization — prompt injection pathway from Halseth → vault → RAG → Claude context. Fix: HTML/markdown-escape string values from external HTTP responses before embedding in vault. |
+| **Medium** | `src/tools/synthesis.ts` | Halseth session data is embedded directly into vault markdown without sanitization — prompt injection pathway from Halseth → vault → RAG → Claude context. Fix: HTML/markdown-escape string values from external HTTP responses before embedding in vault. |
 | **Medium** | `src/clients/halseth-client.ts`, `src/clients/plural-client.ts`, `src/embeddings/openai-embedder.ts` | No schema validation on HTTP responses — responses cast directly to expected types with no Zod check. A malformed response is processed silently. Also: no `AbortSignal` / timeout on any fetch call — server can hang indefinitely if halseth is slow. |
 | **Medium** | `src/tools/capture.ts` | User-supplied `path` and `subject` params are not length-clamped before being passed to `safePath()`. `safePath()` catches traversal, but unbounded strings could hit OS path length limits. Fix: add `.max(256)` to `path` and `subject` Zod schemas in `server.ts`. |
 | **Low** | `src/server.ts:33` | `mkdirSync(dbDir)` called without `mode` argument — directory inherits umask. Fix: `mkdirSync(dbDir, { recursive: true, mode: 0o700 })` to restrict to owner. |
