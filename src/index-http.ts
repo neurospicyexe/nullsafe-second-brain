@@ -13,7 +13,7 @@ if (!config.http) {
   throw new Error('HTTP transport requires an "http" block in second-brain.config.json (port + api_key).');
 }
 
-const { server, synthesis } = createServer(config);
+const { makeMcpServer, synthesis } = createServer(config);
 setupTriggers(config, synthesis);
 
 const { port, api_key } = config.http;
@@ -45,7 +45,7 @@ app.post("/mcp", async (req, res) => {
     transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => randomUUID(),
     });
-    await server.connect(transport);
+    await makeMcpServer().connect(transport);
     if (transport.sessionId) {
       sessions.set(transport.sessionId, transport);
       transport.onclose = () => sessions.delete(transport.sessionId!);
