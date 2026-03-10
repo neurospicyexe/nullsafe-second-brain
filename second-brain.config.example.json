@@ -4,8 +4,9 @@
   "halseth": { "url": "https://your-halseth.workers.dev", "secret": "" },
   "plural": { "enabled": false, "mcp_url": "" },
   "companions": [
-    { "id": "companion-a", "role": "companion", "vault_folder": "Companions/companion-a/" },
-    { "id": "companion-b", "role": "audit", "vault_folder": "Companions/companion-b/" }
+    { "id": "companion-a", "role": "companion", "vault_folder": "companions/companion-a/" },
+    { "id": "companion-b", "role": "audit", "vault_folder": "companions/companion-b/" },
+    { "id": "companion-c", "role": "companion", "vault_folder": "companions/companion-c/" }
   ],
   "triggers": {
     "scheduled": { "enabled": false, "cron": "0 22 * * *" },
@@ -13,10 +14,14 @@
     "event_driven": { "enabled": false, "on_session_close": true, "on_handover": true }
   },
   "routing": [
-    { "companion": "companion-a", "type": "document", "destination": "Companions/companion-a/Creative/" },
-    { "type": "observation", "destination": "00 - INBOX/" },
-    { "type": "session_summary", "destination": "00 - INBOX/" }
+    { "companion": "companion-a", "type": "document", "destination": "companions/companion-a/" },
+    { "companion": "companion-b", "type": "document", "destination": "companions/companion-b/" },
+    { "companion": "companion-c", "type": "document", "destination": "companions/companion-c/" },
+    { "type": "observation", "destination": "raziel/" },
+    { "type": "session_summary", "destination": "raziel/" }
   ],
-  "patterns": { "enabled": true, "hearth_summary": true, "hearth_summary_path": "_recent-patterns.md" },
-  "embeddings": { "provider": "openai", "model": "text-embedding-3-small", "api_key": "" }
+  "patterns": { "enabled": true, "hearth_summary": true, "hearth_summary_path": "nullsafe/system/_recent-patterns.md" },
+  "embeddings": { "provider": "openai", "model": "text-embedding-3-small", "api_key": "" },
+  "http": { "port": 3001, "api_key": "replace-with-a-strong-random-secret" },
+  "couchdb": { "url": "http://localhost:5984", "db": "obsidian-vault", "username": "admin", "password": "" }
 }
