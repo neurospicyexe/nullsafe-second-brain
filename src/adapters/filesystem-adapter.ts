@@ -1,5 +1,5 @@
 import { mkdirSync, existsSync } from "fs";
-import { readFile, writeFile, access } from "fs/promises";
+import { readFile, writeFile, access, rename } from "fs/promises";
 import { join, dirname, resolve, relative, isAbsolute } from "path";
 import type { VaultAdapter, VaultWriteOptions } from "./vault-adapter.js";
 
@@ -34,6 +34,13 @@ export class FilesystemAdapter implements VaultAdapter {
     } catch {
       return false;
     }
+  }
+
+  async move(from: string, to: string): Promise<void> {
+    const fullFrom = this.safePath(from);
+    const fullTo = this.safePath(to);
+    mkdirSync(dirname(fullTo), { recursive: true });
+    await rename(fullFrom, fullTo);
   }
 
   async list(dirPath = ""): Promise<string[]> {
