@@ -72,69 +72,85 @@ export function createServer(config: SecondBrainConfig) {
 
     // Capture tools
     server.tool("sb_save_document",
+      "Save a document to the vault.",
       { content: z.string().max(MAX_CONTENT_LENGTH), path: z.string().optional(), companion: z.string().optional(), tags: z.array(z.string()).max(50).optional() },
       (args) => capture.sb_save_document(args).then(ok));
 
     server.tool("sb_save_note",
+      "Save a note to the vault.",
       { content: z.string().max(MAX_CONTENT_LENGTH), path: z.string().optional(), companion: z.string().optional(), tags: z.array(z.string()).max(50).optional() },
       (args) => capture.sb_save_note(args).then(ok));
 
     server.tool("sb_save_study",
+      "Save study material to the vault.",
       { content: z.string().max(MAX_CONTENT_LENGTH), subject: z.string().optional(), tags: z.array(z.string()).max(50).optional() },
       (args) => capture.sb_save_study(args).then(ok));
 
     server.tool("sb_log_observation",
+      "Log an observation.",
       { content: z.string().max(MAX_CONTENT_LENGTH), tags: z.array(z.string()).max(50).optional() },
       (args) => capture.sb_log_observation(args).then(ok));
 
     // Synthesis tools
     server.tool("sb_synthesize_session",
+      "Synthesize a session.",
       { session_id: z.string() },
       (args) => synthesis.sb_synthesize_session(args).then(ok));
 
     server.tool("sb_run_patterns",
+      "Run patterns analysis.",
       {},
       () => synthesis.sb_run_patterns().then(ok));
 
     server.tool("sb_write_pattern_summary",
+      "Write pattern summary.",
       {},
       () => synthesis.sb_write_pattern_summary().then(ok));
 
     // Retrieval tools
     server.tool("sb_search",
+      "Search the vault.",
       { query: z.string(), limit: z.number().optional() },
       (args) => retrieval.sb_search(args).then(ok));
 
     server.tool("sb_recall",
+      "Recall information.",
       { companion: z.string().nullable(), content_type: z.string().optional(), limit: z.number().optional() },
       (args) => retrieval.sb_recall(args).then(ok));
 
     server.tool("sb_recent_patterns",
+      "Get recent patterns.",
       {},
       () => retrieval.sb_recent_patterns({ vaultAdapter: adapter, summaryPath: heartSummaryPath }).then(ok));
 
     // System tools
     server.tool("sb_status",
+      "Get system status.",
       {},
       () => system.sb_status().then(ok));
 
     server.tool("sb_reindex_note",
+      "Reindex a specific note.",
       { path: z.string() },
       (args) => system.sb_reindex_note(args).then(ok));
 
     server.tool("sb_index_rebuild",
+      "Rebuild index for paths.",
       { paths: z.array(z.string()) },
       (args) => system.sb_index_rebuild(args).then(ok));
 
     server.tool("sb_read",
+      "Read a file from the vault.",
       { path: z.string() },
       (args) => system.sb_read(args).then(ok));
 
     server.tool("sb_list",
+      "List files in a path.",
       { path: z.string().optional() },
       (args) => system.sb_list(args).then(ok));
 
     server.tool("sb_move",
+      "Move a file.",
       { from: z.string(), to: z.string() },
       (args) => system.sb_move(args).then(ok));
 
