@@ -1,5 +1,11 @@
 import { readFileSync } from "fs";
+import { fileURLToPath } from "url";
+import { dirname, join } from "path";
 import { z } from "zod";
+
+// Resolve config path relative to this file, not the working directory.
+// dist/config.js -> .. -> project root -> second-brain.config.json
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const companionSchema = z.object({
   id: z.string().min(1),
@@ -28,7 +34,7 @@ const configSchema = z.object({
   routing: z.array(z.object({
     companion: z.string().optional(),
     tag: z.string().optional(),
-    type: z.string().optional(),
+    type: z.enum(["document", "note", "study", "observation", "session_summary"]).optional(),
     subject_field: z.boolean().optional(),
     destination: z.string(),
   })),
@@ -43,11 +49,22 @@ const configSchema = z.object({
     api_key: z.string().optional(),
     ollama_url: z.string().optional(),
   }),
+  http: z.object({
+    port: z.number().int().min(1024).max(65535),
+    api_key: z.string().min(1),
+  }).optional(),
+  couchdb: z.object({
+    url: z.string().url(),
+    db: z.string().min(1),
+    username: z.string(),
+    password: z.string(),
+  }).optional(),
 });
 
 export type SecondBrainConfig = z.infer<typeof configSchema>;
 
-export function loadConfig(path = "second-brain.config.json"): SecondBrainConfig {
+export function loadConfig(configPath?: string): SecondBrainConfig {
+  const path = configPath ?? join(__dirname, "..", "second-brain.config.json");
   let raw: unknown;
   try {
     const text = readFileSync(path, "utf-8");

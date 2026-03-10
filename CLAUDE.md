@@ -49,6 +49,74 @@ src/
 | `second-brain.config.example.json` | committed | Structure with placeholder values |
 | `second-brain.config.json` | gitignored | Your actual config — vault path, companion ids, API keys |
 
+## VPS Deployment Plan
+
+**Goal:** Move second-brain from local Windows to an Ubuntu VPS so it runs 24/7.
+
+### Sync Architecture
+
+```
+VPS (second-brain runs here, writes vault files)
+    ↕  Obsidian LiveSync via CouchDB (also on VPS)
+iPhone / iPad / Windows PC / any device (all sync directly to VPS)
+```
+
+- **No PC dependency.** All devices sync directly to CouchDB on the VPS.
+- Works when laptop is closed, asleep, or away from home.
+- **Obsidian LiveSync** plugin replaces Obsidian Sync on all devices — cancel Obsidian Sync subscription once LiveSync is confirmed working.
+- The SQLite vector store (`~/.nullsafe-second-brain/vector-store.db`) stays local to the VPS only — excluded from vault sync.
+- CouchDB runs on the VPS alongside second-brain, ideally behind a reverse proxy (Caddy recommended) with HTTPS.
+
+### VPS Setup Checklist (in order)
+
+**Server hardening**
+- [ ] SSH key-based auth working (password auth disabled)
+- [ ] Non-root user created (e.g. `nullsafe`)
+- [ ] UFW firewall enabled (allow 22, 80, 443 only)
+
+**CouchDB + LiveSync**
+- [x] CouchDB installed (`apt install couchdb`, single-node mode)
+- [x] CouchDB admin password set, bound to localhost only
+- [x] Caddy installed as reverse proxy (handles HTTPS automatically via Let's Encrypt)
+- [x] Caddy proxies `https://db.softcrashentity.com` → `localhost:5984`
+- [x] CouchDB database created for vault (`obsidian-vault`)
+- [x] LiveSync plugin installed in Obsidian on every device (iPhone, iPad, Windows) ← Windows done, iPhone/iPad remaining
+- [ ] All devices pointed at `https://db.softcrashentity.com` with vault db credentials ← Windows done, iPhone/iPad remaining
+
+**Second-brain deployment**
+- [ ] Node.js installed (via nvm)
+- [ ] Repo cloned to VPS, `npm install`, `npm run build`
+- [ ] `second-brain.config.json` created on VPS (`chmod 600`)
+- [ ] Vault folder path in config matches where LiveSync materializes files on VPS
+- [ ] second-brain running as a `systemd` service (auto-restart on reboot)
+
+**Verify**
+- [ ] Write a note on iPhone → appears in vault on VPS within seconds
+- [ ] second-brain writes a file → appears on iPhone Obsidian within seconds
+- [ ] Reboot VPS → second-brain and CouchDB both come back automatically
+
+### Systemd Service
+
+Create `/etc/systemd/system/second-brain.service`:
+```ini
+[Unit]
+Description=Nullsafe Second Brain MCP Server
+After=network.target
+
+[Service]
+Type=simple
+User=nullsafe
+WorkingDirectory=/home/nullsafe/nullsafe-second-brain
+ExecStart=/usr/bin/node dist/index.js
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Enable with: `sudo systemctl enable --now second-brain`
+
 ## Security
 
 Full OWASP + vibesec audit run 2026-03-09. No fixes applied yet.
