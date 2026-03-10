@@ -20,6 +20,8 @@ setupTriggers(config, synthesis);
 
 const { port, api_key } = config.http;
 const issuerUrl = new URL("https://mcp.softcrashentity.com");
+const resourceServerUrl = new URL("https://mcp.softcrashentity.com/mcp");
+const resourceMetadataUrl = `https://mcp.softcrashentity.com/.well-known/oauth-protected-resource/mcp`;
 
 const oauthProvider = new SingleUserOAuthProvider(api_key);
 
@@ -28,10 +30,10 @@ app.set("trust proxy", 1); // trust Caddy's X-Forwarded-For
 app.use(express.json());
 
 // OAuth endpoints — must be installed at root
-app.use(mcpAuthRouter({ provider: oauthProvider, issuerUrl }));
+app.use(mcpAuthRouter({ provider: oauthProvider, issuerUrl, resourceServerUrl }));
 
 // Bearer auth guard for MCP endpoint
-app.use("/mcp", requireBearerAuth({ verifier: oauthProvider }));
+app.use("/mcp", requireBearerAuth({ verifier: oauthProvider, resourceMetadataUrl }));
 
 // Session registry for stateful transport
 const sessions = new Map<string, StreamableHTTPServerTransport>();
