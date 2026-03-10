@@ -24,6 +24,7 @@ const issuerUrl = new URL("https://mcp.softcrashentity.com");
 const oauthProvider = new SingleUserOAuthProvider(api_key);
 
 const app = express();
+app.set("trust proxy", 1); // trust Caddy's X-Forwarded-For
 app.use(express.json());
 
 // OAuth endpoints — must be installed at root
