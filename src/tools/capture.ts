@@ -7,12 +7,16 @@ function timestamp(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
+function ensureMd(path: string): string {
+  return path.endsWith(".md") ? path : path + ".md";
+}
+
 export function buildCaptureTools(indexer: Indexer, resolver: RouteResolver) {
   return {
     async sb_save_document(args: { path?: string; content: string; companion?: string; tags?: string[] }) {
       const companion = args.companion ?? null;
       const tags = args.tags ?? [];
-      const finalPath = args.path ?? `${resolver.resolve({ companion, type: "document", tags })}${timestamp()}-document.md`;
+      const finalPath = ensureMd(args.path ?? `${resolver.resolve({ companion, type: "document", tags })}${timestamp()}-document.md`);
       await indexer.write({ path: finalPath, content: args.content, companion, content_type: "document", tags });
       return { path: finalPath };
     },
@@ -20,7 +24,7 @@ export function buildCaptureTools(indexer: Indexer, resolver: RouteResolver) {
     async sb_save_note(args: { path?: string; content: string; companion?: string; tags?: string[] }) {
       const companion = args.companion ?? null;
       const tags = args.tags ?? [];
-      const finalPath = args.path ?? `${resolver.resolve({ companion, type: "note", tags })}${timestamp()}-note.md`;
+      const finalPath = ensureMd(args.path ?? `${resolver.resolve({ companion, type: "note", tags })}${timestamp()}-note.md`);
       await indexer.write({ path: finalPath, content: args.content, companion, content_type: "note", tags });
       return { path: finalPath };
     },
