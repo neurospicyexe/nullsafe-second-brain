@@ -1,6 +1,6 @@
 import express from "express";
 import { createServer as createHttpServer } from "http";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { mcpAuthRouter } from "@modelcontextprotocol/sdk/server/auth/router.js";
 import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
 import { randomUUID } from "crypto";
@@ -36,43 +36,32 @@ app.use(mcpAuthRouter({ provider: oauthProvider, issuerUrl, resourceServerUrl })
 app.use("/mcp", requireBearerAuth({ verifier: oauthProvider, resourceMetadataUrl }));
 
 // Session registry for stateful transport
-const sessions = new Map<string, StreamableHTTPServerTransport>();
+const sessions = new Map<string, SSEServerTransport>();
 
-// POST /mcp — initialize or continue a session
-app.post("/mcp", async (req, res) => {
-  const sessionId = req.headers["mcp-session-id"] as string | undefined;
+// GET /mcp — Initialize SSE stream
+app.get("/mcp", async (req, res) => {
+  const transport = new SSEServerTransport("/mcp/message", res);
+  await makeMcpServer().connect(transport);
 
-  let transport: StreamableHTTPServerTransport;
-
-  if (sessionId && sessions.has(sessionId)) {
-    transport = sessions.get(sessionId)!;
-  } else {
-    transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: () => randomUUID(),
-    });
-    await makeMcpServer().connect(transport);
-    if (transport.sessionId) {
-      sessions.set(transport.sessionId, transport);
-      transport.onclose = () => sessions.delete(transport.sessionId!);
-    }
-  }
-
-  await transport.handleRequest(req, res, req.body);
+  sessions.set(transport.sessionId, transport);
+  transport.onclose = () => sessions.delete(transport.sessionId);
 });
 
-// GET /mcp — SSE stream for server-initiated messages
-app.get("/mcp", async (req, res) => {
-  const sessionId = req.headers["mcp-session-id"] as string | undefined;
+// POST /mcp/message — Handle incoming RPC messages
+app.post("/mcp/message", async (req, res) => {
+  const sessionId = req.query.sessionId as string;
   if (!sessionId || !sessions.has(sessionId)) {
-    res.status(400).json({ error: "Missing or invalid mcp-session-id" });
+    res.status(400).json({ error: "Missing or invalid sessionId parameter" });
     return;
   }
-  await sessions.get(sessionId)!.handleRequest(req, res);
+
+  const transport = sessions.get(sessionId)!;
+  await transport.handlePostMessage(req, res);
 });
 
-// DELETE /mcp — clean up session
+// DELETE /mcp — Clean up session (optional, but good for active cleanup)
 app.delete("/mcp", async (req, res) => {
-  const sessionId = req.headers["mcp-session-id"] as string | undefined;
+  const sessionId = req.query.sessionId as string;
   if (sessionId && sessions.has(sessionId)) {
     await sessions.get(sessionId)!.close();
     sessions.delete(sessionId);
