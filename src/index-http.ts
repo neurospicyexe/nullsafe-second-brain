@@ -1,10 +1,11 @@
 import express from "express";
 import cors from "cors";
 import { createServer as createHttpServer } from "http";
-import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+import { randomUUID } from "crypto";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { mcpAuthRouter } from "@modelcontextprotocol/sdk/server/auth/router.js";
 import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
-import { randomUUID } from "crypto";
 import { loadConfig } from "./config.js";
 import { createServer } from "./server.js";
 import { setupTriggers } from "./triggers.js";
@@ -20,6 +21,7 @@ const { makeMcpServer, synthesis } = createServer(config);
 setupTriggers(config, synthesis);
 
 const { port, api_key } = config.http;
+
 const issuerUrl = new URL("https://mcp.softcrashentity.com");
 const resourceServerUrl = new URL("https://mcp.softcrashentity.com/mcp");
 const resourceMetadataUrl = `https://mcp.softcrashentity.com/.well-known/oauth-protected-resource/mcp`;
@@ -27,51 +29,73 @@ const resourceMetadataUrl = `https://mcp.softcrashentity.com/.well-known/oauth-p
 const oauthProvider = new SingleUserOAuthProvider(api_key);
 
 const app = express();
-app.set("trust proxy", 1); // trust Caddy's X-Forwarded-For
+app.set("trust proxy", 1);
 
-// Enable CORS before auth
+// CORS must be first — handles OPTIONS preflight before auth runs
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json());
 
-// OAuth endpoints — must be installed at root
+// OAuth discovery + token endpoints — must be at app root before any guards
 app.use(mcpAuthRouter({ provider: oauthProvider, issuerUrl, resourceServerUrl }));
 
-// Bearer auth guard for MCP endpoint
+// Bearer auth guard on all /mcp routes
 app.use("/mcp", requireBearerAuth({ verifier: oauthProvider, resourceMetadataUrl }));
 
-// Session registry for stateful transport
-const sessions = new Map<string, SSEServerTransport>();
+// Session registry: Mcp-Session-Id header value → transport instance
+const transports = new Map<string, StreamableHTTPServerTransport>();
 
-// GET /mcp — Initialize SSE stream
-app.get("/mcp", async (req, res) => {
-  const transport = new SSEServerTransport("/mcp/message", res);
-  await makeMcpServer().connect(transport);
+// Single handler for all HTTP verbs on /mcp (POST, GET, DELETE)
+const mcpHandler = async (req: express.Request, res: express.Response): Promise<void> => {
+  try {
+    const sessionId = req.headers["mcp-session-id"] as string | undefined;
 
-  sessions.set(transport.sessionId, transport);
-  transport.onclose = () => sessions.delete(transport.sessionId);
-});
+    if (sessionId && transports.has(sessionId)) {
+      // Existing session — route to existing transport
+      const transport = transports.get(sessionId)!;
+      await transport.handleRequest(req, res, req.body);
+      return;
+    }
 
-// POST /mcp/message — Handle incoming RPC messages
-app.post("/mcp/message", async (req, res) => {
-  const sessionId = req.query.sessionId as string;
-  if (!sessionId || !sessions.has(sessionId)) {
-    res.status(400).json({ error: "Missing or invalid sessionId parameter" });
-    return;
+    if (!sessionId && req.method === "POST" && isInitializeRequest(req.body)) {
+      // New session — create transport, wire MCP server, handle initialize
+      const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: () => randomUUID(),
+        onsessioninitialized: (sid) => {
+          transports.set(sid, transport);
+        },
+      });
+
+      transport.onclose = () => {
+        const sid = transport.sessionId;
+        if (sid) transports.delete(sid);
+      };
+
+      await makeMcpServer().connect(transport);
+      await transport.handleRequest(req, res, req.body);
+      return;
+    }
+
+    // Unknown request — no session, not an initialize
+    res.status(400).json({
+      jsonrpc: "2.0",
+      error: { code: -32000, message: "Bad Request: Missing or invalid Mcp-Session-Id" },
+      id: null,
+    });
+  } catch (err) {
+    console.error("MCP handler error:", err);
+    if (!res.headersSent) {
+      res.status(500).json({
+        jsonrpc: "2.0",
+        error: { code: -32603, message: "Internal server error" },
+        id: null,
+      });
+    }
   }
+};
 
-  const transport = sessions.get(sessionId)!;
-  await transport.handlePostMessage(req, res, req.body);
-});
-
-// DELETE /mcp — Clean up session (optional, but good for active cleanup)
-app.delete("/mcp", async (req, res) => {
-  const sessionId = req.query.sessionId as string;
-  if (sessionId && sessions.has(sessionId)) {
-    await sessions.get(sessionId)!.close();
-    sessions.delete(sessionId);
-  }
-  res.status(200).json({ ok: true });
-});
+app.post("/mcp", mcpHandler);
+app.get("/mcp", mcpHandler);
+app.delete("/mcp", mcpHandler);
 
 const httpServer = createHttpServer(app);
 httpServer.listen(port, "127.0.0.1", () => {
