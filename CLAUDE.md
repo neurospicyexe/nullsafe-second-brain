@@ -19,7 +19,8 @@ This file provides guidance to Claude Code when working in this repository.
 
 ```
 src/
-  adapters/       VaultAdapter interface + FilesystemAdapter + (future) ObsidianRESTAdapter
+  adapters/       VaultAdapter interface + FilesystemAdapter + CouchDBAdapter
+  index-http.ts   HTTP entry point — StreamableHTTP transport for Claude.ai (2025-03-26 spec)
   clients/        HalsethClient, PluralClient — HTTP wrappers for external MCPs
   embeddings/     Embedder interface + OpenAIEmbedder
   store/          VectorStore — SQLite via better-sqlite3
@@ -35,6 +36,9 @@ src/
 ## Key Invariants
 
 - Companion names are never hardcoded. Always `companion.id` from config.
+- Companion IDs are always lowercase in config. Tool inputs normalize via `.toLowerCase()` — callers may pass any casing.
+- All paths written to the vault must end in `.md`. `capture.ts` enforces this automatically via `ensureMd()`.
+- The CouchDB adapter is used automatically when `couchdb` is present in config — `vault.adapter` is ignored in that case.
 - `second-brain.config.json` is gitignored. Only `second-brain.config.example.json` is committed.
 - The SQLite vector store lives in `~/.nullsafe-second-brain/vector-store.db` — outside the vault folder so Obsidian Sync does not attempt to sync it.
 - All vault writes go through `Indexer.write()` — direct adapter calls bypass the vector store.
@@ -75,13 +79,13 @@ Mobile / Desktop / any device (all sync directly to VPS)
 - [ ] UFW firewall enabled (allow 22, 80, 443 only)
 
 **CouchDB + LiveSync**
-- [ ] CouchDB installed (`apt install couchdb`, single-node mode)
-- [ ] CouchDB admin password set, bound to localhost only
-- [ ] Caddy installed as reverse proxy (handles HTTPS automatically via Let's Encrypt)
-- [ ] Caddy proxies `https://<your-couchdb-domain>` → `localhost:5984`
-- [ ] CouchDB database created for vault
-- [ ] LiveSync plugin installed in Obsidian on every device
-- [ ] All devices pointed at your CouchDB domain with vault db credentials
+- [x] CouchDB installed and running (`systemctl status couchdb` → active)
+- [x] CouchDB admin password set, bound to localhost only
+- [x] Caddy installed and running
+- [x] Caddy proxies `https://db.softcrashentity.com` → `localhost:5984`
+- [x] CouchDB database `obsidian-vault` created and receiving writes (10+ docs confirmed)
+- [ ] LiveSync plugin configured on all devices and syncing
+- [ ] Verify: write from Claude.ai → appears in Obsidian within seconds
 
 **Second-brain deployment**
 - [x] Node.js installed (via nvm)
@@ -90,19 +94,29 @@ Mobile / Desktop / any device (all sync directly to VPS)
 - [x] CouchDBAdapter writes directly to CouchDB in LiveSync format — no vault path needed
 - [x] second-brain running as a `systemd` service (auto-restart on reboot)
 - [x] HTTP MCP transport live at `https://mcp.softcrashentity.com/mcp`
-- [ ] **BLOCKER**: OAuth / MCP connection failing with Claude.ai
+- [x] Claude.ai connects, authenticates via OAuth, and can see + call all tools
 
-**Debugging Log (2026-03-10):**
-- **Issue**: Claude.ai connects but drops the tools / refuses to connect.
+**Debugging Log (2026-03-10 → 2026-03-11):**
 - **Fix 1:** Tools in `src/server.ts` lacked string descriptions. Claude drops tools without descriptions. *Added descriptions to all tools.*
-- **Fix 2:** `src/index-http.ts` used `StreamableHTTPServerTransport` (requires POST to init) but Claude expects standard SSE (GET to init). *Replaced with `SSEServerTransport`.*
-- **Fix 3:** `OPTIONS` preflight requests were failing `401 Unauthorized` because the Bearer Auth middleware ran *before* CORS. *Added `cors` package and moved it above the auth middleware.*
-- **Fix 4:** `req.body` wasn't being passed to `handlePostMessage` for standard SSE. *Added `req.body` to the handler.*
-- **Current State:** The connection still drops with an auth/permissions error: *"Error connecting to the MCP server. Please confirm that you have permission to access the service..."* The OAuth flow in `src/oauth-provider.ts` auto-approves and issues the token, but the connection or token verification is failing somewhere in the pipeline between Claude, Caddy, and Express.
+- **Fix 2 (2026-03-10):** `src/index-http.ts` originally used `StreamableHTTPServerTransport` but was rolled back to `SSEServerTransport`. Then rolled back again — Claude.ai actually requires the **2025-03-26 Streamable HTTP spec** (`POST /mcp`), not SSE (`GET /mcp`). *Rewrote `index-http.ts` to use `StreamableHTTPServerTransport` with session registry.*
+- **Fix 3:** `OPTIONS` preflight requests were failing `401` because Bearer auth ran before CORS. *Moved `cors()` above auth middleware.*
+- **Fix 4:** `req.body` wasn't being passed to `handlePostMessage`. *Added `req.body` to handler.*
+- **Fix 5 (2026-03-11):** OAuth `exchangeAuthorizationCode` missing `expires_in`, `verifyAccessToken` had hardcoded `clientId: "claude-ai"`. *Added `tokenToClientId` map, added `expires_in: 31536000` to token responses.*
+- **Fix 6 (2026-03-11):** Vault writes not appearing in Obsidian — CouchDB was receiving writes fine (confirmed), but LiveSync not yet configured on devices. LiveSync database lock warning resolved by going through setup wizard.
+- **Fix 7 (2026-03-11):** Custom `path` arguments without `.md` extension caused LiveSync to reject files. *Added `ensureMd()` safeguard in `capture.ts`.*
+- **Fix 8 (2026-03-11):** Companion IDs case-sensitive — config uses lowercase (`drevan`) but Claude.ai passes capitalized (`Drevan`). *Added `.toLowerCase()` normalization in `capture.ts`.*
+- **Fix 9 (2026-03-11):** Tool errors were swallowed silently with no server-side logging. *Added `run()` wrapper in `server.ts` that logs to stderr before rethrowing.*
+
+**Current State (2026-03-11):**
+- OAuth + MCP connection: **working** ✓
+- CouchDB writes: **working** ✓ (confirmed via `_all_docs`)
+- Tool execution: **errors on `sb_save_document`** — exact cause TBD, error logging now in place. Deploy latest commit and re-test to see error in `journalctl`.
+- LiveSync → Obsidian sync: **partially working** — plugin configured but sync not yet verified end-to-end
 
 **Verify**
-- [ ] second-brain writes a file → appears in Obsidian on devices within seconds
+- [ ] `sb_save_document` succeeds and file appears in Obsidian within seconds
 - [ ] Reboot VPS → second-brain and CouchDB both come back automatically
+- [ ] Rotate `http.api_key` in config (current key was exposed in chat on 2026-03-11)
 
 ### Systemd Service
 
@@ -130,7 +144,7 @@ Enable with: `sudo systemctl enable --now second-brain`
 
 Full OWASP + vibesec audit run 2026-03-09. No fixes applied yet.
 
-**Status: This server has never been launched.** Before first launch, verify:
+**Status: Server is live on VPS.** Known outstanding items:
 1. `second-brain.config.json` was created and filled in from the example
 2. The `halseth.secret` in config equals `ADMIN_SECRET` in the halseth Cloudflare Worker
 3. The auth header fix is already in place: `src/clients/halseth-client.ts` sends `Authorization: Bearer` (not `x-halseth-secret`) — this was applied 2026-03-09 as part of the suite security pass
