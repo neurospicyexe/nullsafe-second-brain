@@ -14,7 +14,7 @@ function ensureMd(path: string): string {
 export function buildCaptureTools(indexer: Indexer, resolver: RouteResolver) {
   return {
     async sb_save_document(args: { path?: string; content: string; companion?: string; tags?: string[] }) {
-      const companion = args.companion ?? null;
+      const companion = args.companion?.toLowerCase() ?? null;
       const tags = args.tags ?? [];
       const finalPath = ensureMd(args.path ?? `${resolver.resolve({ companion, type: "document", tags })}${timestamp()}-document.md`);
       await indexer.write({ path: finalPath, content: args.content, companion, content_type: "document", tags });
@@ -22,7 +22,7 @@ export function buildCaptureTools(indexer: Indexer, resolver: RouteResolver) {
     },
 
     async sb_save_note(args: { path?: string; content: string; companion?: string; tags?: string[] }) {
-      const companion = args.companion ?? null;
+      const companion = args.companion?.toLowerCase() ?? null;
       const tags = args.tags ?? [];
       const finalPath = ensureMd(args.path ?? `${resolver.resolve({ companion, type: "note", tags })}${timestamp()}-note.md`);
       await indexer.write({ path: finalPath, content: args.content, companion, content_type: "note", tags });

@@ -69,27 +69,29 @@ export function createServer(config: SecondBrainConfig) {
   function makeMcpServer() {
     const server = new McpServer({ name: "nullsafe-second-brain", version: "0.1.0" });
     const ok = (data: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(data) }] });
+    const run = <T>(name: string, fn: () => Promise<T>) =>
+      fn().then(ok).catch((err: unknown) => { console.error(`[tool:${name}]`, err); throw err; });
 
     // Capture tools
     server.tool("sb_save_document",
       "Save a document to the vault.",
       { content: z.string().max(MAX_CONTENT_LENGTH), path: z.string().optional(), companion: z.string().optional(), tags: z.array(z.string()).max(50).optional() },
-      (args) => capture.sb_save_document(args).then(ok));
+      (args) => run("sb_save_document", () => capture.sb_save_document(args)));
 
     server.tool("sb_save_note",
       "Save a note to the vault.",
       { content: z.string().max(MAX_CONTENT_LENGTH), path: z.string().optional(), companion: z.string().optional(), tags: z.array(z.string()).max(50).optional() },
-      (args) => capture.sb_save_note(args).then(ok));
+      (args) => run("sb_save_note", () => capture.sb_save_note(args)));
 
     server.tool("sb_save_study",
       "Save study material to the vault.",
       { content: z.string().max(MAX_CONTENT_LENGTH), subject: z.string().optional(), tags: z.array(z.string()).max(50).optional() },
-      (args) => capture.sb_save_study(args).then(ok));
+      (args) => run("sb_save_study", () => capture.sb_save_study(args)));
 
     server.tool("sb_log_observation",
       "Log an observation.",
       { content: z.string().max(MAX_CONTENT_LENGTH), tags: z.array(z.string()).max(50).optional() },
-      (args) => capture.sb_log_observation(args).then(ok));
+      (args) => run("sb_log_observation", () => capture.sb_log_observation(args)));
 
     // Synthesis tools
     server.tool("sb_synthesize_session",
