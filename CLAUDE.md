@@ -90,7 +90,15 @@ Mobile / Desktop / any device (all sync directly to VPS)
 - [x] CouchDBAdapter writes directly to CouchDB in LiveSync format — no vault path needed
 - [x] second-brain running as a `systemd` service (auto-restart on reboot)
 - [x] HTTP MCP transport live at `https://mcp.softcrashentity.com/mcp`
-- [x] OAuth working — Claude.ai connected successfully
+- [ ] **BLOCKER**: OAuth / MCP connection failing with Claude.ai
+
+**Debugging Log (2026-03-10):**
+- **Issue**: Claude.ai connects but drops the tools / refuses to connect.
+- **Fix 1:** Tools in `src/server.ts` lacked string descriptions. Claude drops tools without descriptions. *Added descriptions to all tools.*
+- **Fix 2:** `src/index-http.ts` used `StreamableHTTPServerTransport` (requires POST to init) but Claude expects standard SSE (GET to init). *Replaced with `SSEServerTransport`.*
+- **Fix 3:** `OPTIONS` preflight requests were failing `401 Unauthorized` because the Bearer Auth middleware ran *before* CORS. *Added `cors` package and moved it above the auth middleware.*
+- **Fix 4:** `req.body` wasn't being passed to `handlePostMessage` for standard SSE. *Added `req.body` to the handler.*
+- **Current State:** The connection still drops with an auth/permissions error: *"Error connecting to the MCP server. Please confirm that you have permission to access the service..."* The OAuth flow in `src/oauth-provider.ts` auto-approves and issues the token, but the connection or token verification is failing somewhere in the pipeline between Claude, Caddy, and Express.
 
 **Verify**
 - [ ] second-brain writes a file → appears in Obsidian on devices within seconds
