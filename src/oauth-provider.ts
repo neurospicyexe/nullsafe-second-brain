@@ -25,6 +25,7 @@ interface PendingAuth {
 export class SingleUserOAuthProvider implements OAuthServerProvider {
   private clients = new Map<string, OAuthClientInformationFull>();
   private pendingAuths = new Map<string, PendingAuth>();
+  private tokenToClientId = new Map<string, string>();
 
   constructor(private accessToken: string) {}
 
@@ -74,7 +75,7 @@ export class SingleUserOAuthProvider implements OAuthServerProvider {
   }
 
   async exchangeAuthorizationCode(
-    _client: OAuthClientInformationFull,
+    client: OAuthClientInformationFull,
     authorizationCode: string,
   ): Promise<OAuthTokens> {
     const pending = this.pendingAuths.get(authorizationCode);
@@ -82,9 +83,11 @@ export class SingleUserOAuthProvider implements OAuthServerProvider {
       throw new Error("Invalid or expired authorization code");
     }
     this.pendingAuths.delete(authorizationCode);
+    this.tokenToClientId.set(this.accessToken, client.client_id);
     return {
       access_token: this.accessToken,
       token_type: "Bearer",
+      expires_in: 31536000,
     };
   }
 
@@ -95,6 +98,7 @@ export class SingleUserOAuthProvider implements OAuthServerProvider {
     return {
       access_token: this.accessToken,
       token_type: "Bearer",
+      expires_in: 31536000,
     };
   }
 
@@ -104,7 +108,7 @@ export class SingleUserOAuthProvider implements OAuthServerProvider {
     }
     return {
       token,
-      clientId: "claude-ai",
+      clientId: this.tokenToClientId.get(token) ?? "single-user",
       scopes: [],
       expiresAt: Math.floor(Date.now() / 1000) + 365 * 24 * 60 * 60, // 1 year
     };
