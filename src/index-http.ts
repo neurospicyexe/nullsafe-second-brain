@@ -1,4 +1,5 @@
 import express from "express";
+import cors from "cors";
 import { createServer as createHttpServer } from "http";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { mcpAuthRouter } from "@modelcontextprotocol/sdk/server/auth/router.js";
@@ -27,6 +28,9 @@ const oauthProvider = new SingleUserOAuthProvider(api_key);
 
 const app = express();
 app.set("trust proxy", 1); // trust Caddy's X-Forwarded-For
+
+// Enable CORS before auth
+app.use(cors({ origin: true, credentials: true }));
 app.use(express.json());
 
 // OAuth endpoints — must be installed at root
@@ -56,7 +60,7 @@ app.post("/mcp/message", async (req, res) => {
   }
 
   const transport = sessions.get(sessionId)!;
-  await transport.handlePostMessage(req, res);
+  await transport.handlePostMessage(req, res, req.body);
 });
 
 // DELETE /mcp — Clean up session (optional, but good for active cleanup)
