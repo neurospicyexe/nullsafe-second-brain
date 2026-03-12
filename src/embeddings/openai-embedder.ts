@@ -14,16 +14,27 @@ export class OpenAIEmbedder implements Embedder {
   }
 
   async embedBatch(texts: string[]): Promise<number[][]> {
-    const response = await fetch("https://api.openai.com/v1/embeddings", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${this.options.apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ input: texts, model: this.options.model }),
-    });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15_000);
+    let response: Response;
+    try {
+      response = await fetch("https://api.openai.com/v1/embeddings", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${this.options.apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ input: texts, model: this.options.model }),
+        signal: controller.signal,
+      });
+    } catch (err) {
+      throw new Error(`OpenAI embeddings fetch failed: ${(err as Error).message}`);
+    } finally {
+      clearTimeout(timeout);
+    }
     if (!response.ok) {
-      throw new Error(`OpenAI embeddings error: ${response.statusText}`);
+      const body = await response.text().catch(() => "(unreadable)");
+      throw new Error(`OpenAI embeddings error: ${response.status} ${response.statusText} — ${body}`);
     }
     const json = await response.json() as { data: { embedding: number[] }[] };
     return json.data.map(d => d.embedding);
