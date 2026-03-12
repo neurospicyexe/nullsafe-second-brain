@@ -60,7 +60,7 @@ export class CouchDBAdapter implements VaultAdapter {
       if (!await this.getDoc(id)) {
         await this.putDoc(id, {
           _id: id,
-          data: slice.toString("base64"),
+          data: slice.toString("utf-8"),
           type: "leaf"
         });
       }
@@ -77,7 +77,7 @@ export class CouchDBAdapter implements VaultAdapter {
       mtime: now,
       modified: now, // LiveSync looks for modified in ms
       size: buf.length,
-      type: existing ? "plain" : "newnote",
+      type: "plain", // All our writes are .md (text) — LiveSync uses "newnote" only for binary
       device: this.config.device_id ?? "nullsafe-mcp-server",
       eden: {},
       ...(existing ? { deleted: false } : {}),
@@ -96,12 +96,7 @@ export class CouchDBAdapter implements VaultAdapter {
     for (const chunkId of children) {
       const chunk = await this.getDoc(chunkId);
       if (!chunk) throw new Error(`Missing chunk ${chunkId} for ${path}`);
-      const data = chunk.data as string;
-      try {
-        parts.push(Buffer.from(data, "base64").toString("utf-8"));
-      } catch {
-        parts.push(data);
-      }
+      parts.push(chunk.data as string);
     }
     return parts.join("");
   }
