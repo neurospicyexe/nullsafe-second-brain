@@ -1,4 +1,4 @@
-import { randomBytes } from "crypto";
+import { createHash } from "crypto";
 import type { VaultAdapter, VaultWriteOptions } from "./vault-adapter.js";
 
 export interface CouchDBConfig {
@@ -23,8 +23,8 @@ export class CouchDBAdapter implements VaultAdapter {
     return { Authorization: this.authHeader, "Content-Type": "application/json" };
   }
 
-  private chunkId(): string {
-    return "h:" + randomBytes(8).toString("hex");
+  private chunkId(slice: Buffer): string {
+    return "h:" + createHash("sha256").update(slice).digest("hex");
   }
 
   private async getDoc(id: string): Promise<Record<string, unknown> | null> {
@@ -55,8 +55,10 @@ export class CouchDBAdapter implements VaultAdapter {
     const chunkIds: string[] = [];
     for (let i = 0; i < buf.length || chunkIds.length === 0; i += CHUNK_SIZE) {
       const slice = buf.slice(i, i + CHUNK_SIZE);
-      const id = this.chunkId();
-      await this.putDoc(id, { _id: id, data: slice.toString("base64"), type: "leaf" });
+      const id = this.chunkId(slice);
+      if (!await this.getDoc(id)) {
+        await this.putDoc(id, { _id: id, data: slice.toString("base64"), type: "leaf" });
+      }
       chunkIds.push(id);
     }
 
