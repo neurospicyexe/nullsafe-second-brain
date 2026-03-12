@@ -6,6 +6,7 @@ export interface CouchDBConfig {
   db: string;
   username: string;
   password: string;
+  device_id?: string;
 }
 
 const CHUNK_SIZE = 500_000; // 500KB
@@ -55,10 +56,13 @@ export class CouchDBAdapter implements VaultAdapter {
     const chunkIds: string[] = [];
     for (let i = 0; i < buf.length || chunkIds.length === 0; i += CHUNK_SIZE) {
       const slice = buf.slice(i, i + CHUNK_SIZE);
-      const base64Data = slice.toString("base64");
       const id = this.chunkId(slice);
       if (!await this.getDoc(id)) {
-        await this.putDoc(id, { _id: id, data: base64Data, type: "leaf" });
+        await this.putDoc(id, {
+          _id: id,
+          data: slice.toString("base64"),
+          type: "leaf"
+        });
       }
       chunkIds.push(id);
     }
@@ -71,8 +75,10 @@ export class CouchDBAdapter implements VaultAdapter {
       children: chunkIds,
       ctime: (existing?.ctime as number) ?? now,
       mtime: now,
+      modified: now, // LiveSync looks for modified in ms
       size: buf.length,
       type: existing ? "plain" : "newnote",
+      device: this.config.device_id ?? "nullsafe-mcp-server",
       eden: {},
       ...(existing ? { deleted: false } : {}),
     };

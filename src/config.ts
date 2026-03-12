@@ -58,6 +58,7 @@ const configSchema = z.object({
     db: z.string().min(1),
     username: z.string(),
     password: z.string(),
+    device_id: z.string().optional(),
   }).optional(),
 });
 
