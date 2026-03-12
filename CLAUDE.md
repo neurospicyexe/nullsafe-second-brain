@@ -84,8 +84,8 @@ Mobile / Desktop / any device (all sync directly to VPS)
 - [x] Caddy installed and running
 - [x] Caddy proxies `https://db.softcrashentity.com` → `localhost:5984`
 - [x] CouchDB database `obsidian-vault` created and receiving writes (10+ docs confirmed)
-- [ ] LiveSync plugin configured on all devices and syncing
-- [ ] Verify: write from Claude.ai → appears in Obsidian within seconds
+- [x] LiveSync plugin configured on all devices and syncing
+- [x] Verify: write from Claude.ai → appears in Obsidian within seconds ✓ (confirmed 2026-03-12)
 
 **Second-brain deployment**
 - [x] Node.js installed (via nvm)
@@ -96,7 +96,7 @@ Mobile / Desktop / any device (all sync directly to VPS)
 - [x] HTTP MCP transport live at `https://mcp.softcrashentity.com/mcp`
 - [x] Claude.ai connects, authenticates via OAuth, and can see + call all tools
 
-**Debugging Log (2026-03-10 → 2026-03-11):**
+**Debugging Log (2026-03-10 → 2026-03-12):**
 - **Fix 1:** Tools in `src/server.ts` lacked string descriptions. Claude drops tools without descriptions. *Added descriptions to all tools.*
 - **Fix 2 (2026-03-10):** `src/index-http.ts` originally used `StreamableHTTPServerTransport` but was rolled back to `SSEServerTransport`. Then rolled back again — Claude.ai actually requires the **2025-03-26 Streamable HTTP spec** (`POST /mcp`), not SSE (`GET /mcp`). *Rewrote `index-http.ts` to use `StreamableHTTPServerTransport` with session registry.*
 - **Fix 3:** `OPTIONS` preflight requests were failing `401` because Bearer auth ran before CORS. *Moved `cors()` above auth middleware.*
@@ -106,15 +106,18 @@ Mobile / Desktop / any device (all sync directly to VPS)
 - **Fix 7 (2026-03-11):** Custom `path` arguments without `.md` extension caused LiveSync to reject files. *Added `ensureMd()` safeguard in `capture.ts`.*
 - **Fix 8 (2026-03-11):** Companion IDs case-sensitive — config uses lowercase (`drevan`) but Claude.ai passes capitalized (`Drevan`). *Added `.toLowerCase()` normalization in `capture.ts`.*
 - **Fix 9 (2026-03-11):** Tool errors were swallowed silently with no server-side logging. *Added `run()` wrapper in `server.ts` that logs to stderr before rethrowing.*
+- **Fix 10 (2026-03-12):** CouchDB chunk `data` field was base64-encoded; LiveSync stores raw UTF-8 strings for text files. This caused the content to appear as base64 garbage in Obsidian. *Changed `data: slice.toString("base64")` → `slice.toString("utf-8")` and simplified `read()` to use data as-is.* Root cause confirmed by reading LiveSync source (livesync-commonlib `EntryManagerImpls.ts`): `{ _id: id, data: data, type: "leaf" }` where data is the raw string from the splitter.
+- **Fix 11 (2026-03-12):** Metadata `type` field was `"newnote"` for new docs. LiveSync source confirms `"newnote"` is for binary files; `.md` files should always be `"plain"`. *Changed to always `"plain"`.*
+- **Fix 12 (2026-03-12):** Metadata `size` field was base64 string length (e.g. 252) instead of raw byte count (e.g. 189). LiveSync's corruption check compares assembled chunk string length against `size` — mismatch = "corrupted (189 != 252)". *Changed to `buf.length` (UTF-8 byte count).*
 
-**Current State (2026-03-11):**
+**Current State (2026-03-12): FULLY WORKING ✓**
 - OAuth + MCP connection: **working** ✓
-- CouchDB writes: **working** ✓ (confirmed via `_all_docs`)
-- Tool execution: **errors on `sb_save_document`** — exact cause TBD, error logging now in place. Deploy latest commit and re-test to see error in `journalctl`.
-- LiveSync → Obsidian sync: **partially working** — plugin configured but sync not yet verified end-to-end
+- CouchDB writes: **working** ✓
+- Tool execution: **working** ✓ (`sb_save_document` confirmed)
+- LiveSync → Obsidian sync: **working** ✓ (confirmed end-to-end 2026-03-12)
 
 **Verify**
-- [ ] `sb_save_document` succeeds and file appears in Obsidian within seconds
+- [x] `sb_save_document` succeeds and file appears in Obsidian within seconds ✓
 - [ ] Reboot VPS → second-brain and CouchDB both come back automatically
 - [ ] Rotate `http.api_key` in config (current key was exposed in chat on 2026-03-11)
 
