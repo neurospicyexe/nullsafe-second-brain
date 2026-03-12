@@ -23,5 +23,11 @@
   "patterns": { "enabled": true, "hearth_summary": true, "hearth_summary_path": "nullsafe/system/_recent-patterns.md" },
   "embeddings": { "provider": "openai", "model": "text-embedding-3-small", "api_key": "" },
   "http": { "port": 3001, "api_key": "replace-with-a-strong-random-secret" },
-  "couchdb": { "url": "http://localhost:5984", "db": "obsidian-vault", "username": "admin", "password": "" }
+  "couchdb": {
+    "url": "http://localhost:5984",
+    "db": "obsidian-vault",
+    "username": "admin",
+    "password": "your-password",
+    "device_id": "nullsafe-mcp-server"
+  }
 }
