@@ -113,6 +113,8 @@ const transports = new Map<string, StreamableHTTPServerTransport>();
 const mcpHandler = async (req: Request, res: Response): Promise<void> => {
   try {
     const sessionId = req.headers["mcp-session-id"] as string | undefined;
+    const method = req.body?.method ?? req.method;
+    console.error(`[mcp] ${req.method} session=${sessionId?.slice(0, 8) ?? "none"} method=${method}`);
 
     if (sessionId && transports.has(sessionId)) {
       const transport = transports.get(sessionId)!;
@@ -142,6 +144,7 @@ const mcpHandler = async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
+    console.error(`[mcp] 400 — sessionId=${sessionId ?? "none"} known=${[...transports.keys()].map(k => k.slice(0, 8)).join(",")}`);
     res.status(400).json({
       jsonrpc: "2.0",
       error: { code: -32000, message: "Bad Request: Missing or invalid Mcp-Session-Id" },
