@@ -52,13 +52,10 @@ export class CouchDBAdapter implements VaultAdapter {
     const buf = Buffer.from(content, "utf-8");
 
     // Split into chunks
-    // LiveSync checks size against the total base64 data length (not raw byte count)
     const chunkIds: string[] = [];
-    let totalBase64Size = 0;
     for (let i = 0; i < buf.length || chunkIds.length === 0; i += CHUNK_SIZE) {
       const slice = buf.slice(i, i + CHUNK_SIZE);
       const base64Data = slice.toString("base64");
-      totalBase64Size += base64Data.length;
       const id = this.chunkId(slice);
       if (!await this.getDoc(id)) {
         await this.putDoc(id, { _id: id, data: base64Data, type: "leaf" });
@@ -74,10 +71,10 @@ export class CouchDBAdapter implements VaultAdapter {
       children: chunkIds,
       ctime: (existing?.ctime as number) ?? now,
       mtime: now,
-      size: totalBase64Size,
-      type: "plain",
+      size: buf.length,
+      type: existing ? "plain" : "newnote",
       eden: {},
-      deleted: false,
+      ...(existing ? { deleted: false } : {}),
     };
     if (existing?._rev) metaDoc._rev = existing._rev;
 
