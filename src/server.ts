@@ -33,7 +33,7 @@ export function createServer(config: SecondBrainConfig) {
     : new FilesystemAdapter(config.vault.path);
 
   const dbDir = join(homedir(), ".nullsafe-second-brain");
-  mkdirSync(dbDir, { recursive: true });
+  mkdirSync(dbDir, { recursive: true, mode: 0o700 });
   const dbPath = join(dbDir, "vector-store.db");
 
   const store = new VectorStore(dbPath);

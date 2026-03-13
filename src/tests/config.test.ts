@@ -41,15 +41,29 @@ describe("loadConfig - http block", () => {
   });
 
   it("loads config with http block", () => {
-    const p = makeTmp(); writeConfig({ ...baseConfig, http: { port: 3001, api_key: "secret" } }, p);
+    const longKey = "a".repeat(32);
+    const p = makeTmp(); writeConfig({ ...baseConfig, http: { port: 3001, api_key: longKey } }, p);
     const config = loadConfig(p);
     expect(config.http?.port).toBe(3001);
-    expect(config.http?.api_key).toBe("secret");
+    expect(config.http?.api_key).toBe(longKey);
     cleanup(p);
   });
 
   it("rejects http block with invalid port", () => {
-    const p = makeTmp(); writeConfig({ ...baseConfig, http: { port: "not-a-number", api_key: "secret" } }, p);
+    const longKey = "a".repeat(32);
+    const p = makeTmp(); writeConfig({ ...baseConfig, http: { port: "not-a-number", api_key: longKey } }, p);
+    expect(() => loadConfig(p)).toThrow();
+    cleanup(p);
+  });
+
+  it("rejects api_key shorter than 32 characters", () => {
+    const p = makeTmp(); writeConfig({ ...baseConfig, http: { port: 3001, api_key: "tooshort" } }, p);
+    expect(() => loadConfig(p)).toThrow(/32/);
+    cleanup(p);
+  });
+
+  it("rejects empty api_key", () => {
+    const p = makeTmp(); writeConfig({ ...baseConfig, http: { port: 3001, api_key: "" } }, p);
     expect(() => loadConfig(p)).toThrow();
     cleanup(p);
   });

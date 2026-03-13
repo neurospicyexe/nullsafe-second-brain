@@ -64,7 +64,18 @@ const app = express();
 app.set("trust proxy", 1);
 
 // CORS must be first — handles OPTIONS preflight before auth runs
-app.use(cors({ origin: true, credentials: true }));
+app.use(cors({
+  origin: ["https://claude.ai", "https://mcp.softcrashentity.com"],
+  credentials: true,
+}));
+
+// Security headers — defense-in-depth even behind Caddy proxy
+app.use((_req: Request, res: Response, next: NextFunction) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  next();
+});
 
 // Raise body limit to 4 MB — MCP tool payloads with large content exceed the
 // default 100 kb limit, causing raw-body to throw before the handler runs.
@@ -113,7 +124,7 @@ const transports = new Map<string, StreamableHTTPServerTransport>();
 const mcpHandler = async (req: Request, res: Response): Promise<void> => {
   try {
     const sessionId = req.headers["mcp-session-id"] as string | undefined;
-    const method = req.body?.method ?? req.method;
+    const method = String(req.body?.method ?? req.method).replace(/[\r\n]/g, " ").slice(0, 64);
     console.error(`[mcp] ${req.method} session=${sessionId?.slice(0, 8) ?? "none"} method=${method}`);
 
     if (sessionId && transports.has(sessionId)) {
