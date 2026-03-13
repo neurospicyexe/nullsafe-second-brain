@@ -11,6 +11,7 @@ export class FilesystemAdapter implements VaultAdapter {
     const resolved = resolve(join(root, relativePath));
     const rel = relative(root, resolved);
     if (rel.startsWith("..") || isAbsolute(rel)) {
+      console.error(`[security] Path traversal blocked: attempted="${relativePath}" resolved="${rel}"`);
       throw new Error(`Path resolves outside vault root`);
     }
     return resolved;
