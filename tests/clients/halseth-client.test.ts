@@ -33,16 +33,41 @@ describe("HalsethClient", () => {
     expect(sessions).toHaveLength(2);
   });
 
-  it("getRecentDeltas returns array", async () => {
-    mockOk([{ id: "d1", delta_text: "a moment" }]);
+  it("getRecentDeltas filters by date client-side", async () => {
+    const recent = new Date().toISOString();
+    const old = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+    mockOk([
+      { id: "d1", delta_text: "recent", created_at: recent },
+      { id: "d2", delta_text: "old",    created_at: old },
+    ]);
     const deltas = await makeClient().getRecentDeltas(7);
-    expect(deltas[0].delta_text).toBe("a moment");
+    expect(deltas).toHaveLength(1);
+    expect(deltas[0].id).toBe("d1");
   });
 
-  it("getHandover fetches by id", async () => {
-    mockOk({ id: "h1", spine: "what happened" });
-    const handover = await makeClient().getHandover("h1");
-    expect(handover.spine).toBe("what happened");
+  it("getHandover returns matching handover by session_id", async () => {
+    mockOk([
+      { id: "h1", session_id: "sess-abc", spine: "what happened" },
+      { id: "h2", session_id: "sess-xyz", spine: "other" },
+    ]);
+    const handover = await makeClient().getHandover("sess-abc");
+    expect(handover?.spine).toBe("what happened");
+  });
+
+  it("getHandover returns null when session_id not found", async () => {
+    mockOk([{ id: "h1", session_id: "sess-abc", spine: "what happened" }]);
+    const handover = await makeClient().getHandover("no-match");
+    expect(handover).toBeNull();
+  });
+
+  it("getRecentSessions calls /sessions?days=N", async () => {
+    mockOk([{ id: "s1" }, { id: "s2" }]);
+    const sessions = await makeClient().getRecentSessions(7);
+    expect(sessions).toHaveLength(2);
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining("/sessions?days=7"),
+      expect.any(Object),
+    );
   });
 
   it("getRoutines fetches with date param when provided", async () => {
