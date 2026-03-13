@@ -1,17 +1,26 @@
 import type { Indexer } from "../indexer.js";
 import type { HalsethClient } from "../clients/halseth-client.js";
 
+// Escape markdown special characters and strip newlines from external data.
+// Prevents prompt injection via Halseth → vault → RAG → Claude context.
+function escapeMd(value: unknown): string {
+  return String(value ?? "unknown")
+    .replace(/[\\`*_{}[\]()#+\-!|]/g, "\\$&")
+    .replace(/[\r\n]+/g, " ")
+    .slice(0, 1000);
+}
+
 function formatSessionNote(session: Record<string, unknown>): string {
   return [
-    `# Session Summary — ${String(session.id)}`,
+    `# Session Summary — ${escapeMd(session.id)}`,
     ``,
-    `**Front:** ${String(session.front_state ?? "unknown")}`,
-    `**Frequency:** ${String(session.emotional_frequency ?? "not recorded")}`,
-    `**Anchor:** ${String(session.active_anchor ?? "none")}`,
-    `**Facet:** ${String(session.facet ?? "none")}`,
+    `**Front:** ${escapeMd(session.front_state)}`,
+    `**Frequency:** ${escapeMd(session.emotional_frequency)}`,
+    `**Anchor:** ${escapeMd(session.active_anchor)}`,
+    `**Facet:** ${escapeMd(session.facet)}`,
     ``,
     `## Notes`,
-    String(session.notes ?? "No notes recorded."),
+    escapeMd(session.notes),
   ].join("\n");
 }
 

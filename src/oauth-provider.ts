@@ -33,6 +33,9 @@ export class SingleUserOAuthProvider implements OAuthServerProvider {
     return {
       getClient: (clientId) => this.clients.get(clientId),
       registerClient: (client) => {
+        if (this.clients.size >= 50) {
+          throw new Error("Client registration limit reached (50 max)");
+        }
         const full: OAuthClientInformationFull = {
           ...client,
           client_id: randomUUID(),
@@ -49,6 +52,13 @@ export class SingleUserOAuthProvider implements OAuthServerProvider {
     params: AuthorizationParams,
     res: Response,
   ): Promise<void> {
+    // Validate redirect_uri against registered URIs (RFC 6749 §10.6)
+    const registered = client.redirect_uris ?? [];
+    if (!registered.includes(params.redirectUri)) {
+      res.status(400).json({ error: "invalid_redirect_uri" });
+      return;
+    }
+
     // Auto-approve — this is a personal single-user server
     const authCode = randomBytes(16).toString("hex");
     this.pendingAuths.set(authCode, {
@@ -95,11 +105,7 @@ export class SingleUserOAuthProvider implements OAuthServerProvider {
     _client: OAuthClientInformationFull,
     _refreshToken: string,
   ): Promise<OAuthTokens> {
-    return {
-      access_token: this.accessToken,
-      token_type: "Bearer",
-      expires_in: 31536000,
-    };
+    throw new Error("Refresh tokens are not supported by this server");
   }
 
   async verifyAccessToken(token: string): Promise<AuthInfo> {

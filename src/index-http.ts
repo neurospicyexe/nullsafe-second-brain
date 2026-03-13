@@ -64,7 +64,18 @@ const app = express();
 app.set("trust proxy", 1);
 
 // CORS must be first — handles OPTIONS preflight before auth runs
-app.use(cors({ origin: true, credentials: true }));
+app.use(cors({
+  origin: ["https://claude.ai", "https://mcp.softcrashentity.com"],
+  credentials: true,
+}));
+
+// Security headers — defense-in-depth even behind Caddy proxy
+app.use((_req: Request, res: Response, next: NextFunction) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  next();
+});
 
 // Raise body limit to 4 MB — MCP tool payloads with large content exceed the
 // default 100 kb limit, causing raw-body to throw before the handler runs.
@@ -113,7 +124,7 @@ const transports = new Map<string, StreamableHTTPServerTransport>();
 const mcpHandler = async (req: Request, res: Response): Promise<void> => {
   try {
     const sessionId = req.headers["mcp-session-id"] as string | undefined;
-    const method = req.body?.method ?? req.method;
+    const method = String(req.body?.method ?? req.method).replace(/[\r\n]/g, " ").slice(0, 64);
     console.error(`[mcp] ${req.method} session=${sessionId?.slice(0, 8) ?? "none"} method=${method}`);
 
     if (sessionId && transports.has(sessionId)) {
@@ -122,12 +133,18 @@ const mcpHandler = async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
-    if (!sessionId && req.method === "POST" && isInitializeRequest(req.body)) {
+    if (req.method === "POST" && isInitializeRequest(req.body)) {
+      // Accept both fresh connections (no session ID) and stale session IDs from
+      // clients that cached a session across a server restart. When the client
+      // already has a session ID we reuse it as the generator so the response
+      // echoes the same ID back — the client never notices the restart.
+      const reuseId = sessionId ?? null;
       const transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: () => randomUUID(),
+        sessionIdGenerator: reuseId ? () => reuseId : () => randomUUID(),
         onsessioninitialized: (sid) => {
           transports.set(sid, transport);
-          console.error(`[mcp] Session initialized: ${sid} (active: ${transports.size})`);
+          const label = reuseId ? "re-registered" : "initialized";
+          console.error(`[mcp] Session ${label}: ${sid} (active: ${transports.size})`);
         },
       });
 
@@ -144,10 +161,12 @@ const mcpHandler = async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
-    console.error(`[mcp] 400 — sessionId=${sessionId ?? "none"} known=${[...transports.keys()].map(k => k.slice(0, 8)).join(",")}`);
-    res.status(400).json({
+    // Unknown session ID on a non-initialize request — session is gone (restart).
+    // 404 signals to the client that it should re-initialize.
+    console.error(`[mcp] 404 — sessionId=${sessionId ?? "none"} known=${[...transports.keys()].map(k => k.slice(0, 8)).join(",")}`);
+    res.status(404).json({
       jsonrpc: "2.0",
-      error: { code: -32000, message: "Bad Request: Missing or invalid Mcp-Session-Id" },
+      error: { code: -32001, message: "Session not found: please re-initialize" },
       id: null,
     });
   } catch (err) {

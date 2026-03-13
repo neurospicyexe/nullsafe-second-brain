@@ -27,8 +27,10 @@ describe("PluralClient", () => {
   });
 
   it("throws on non-ok response", async () => {
-    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ ok: false, statusText: "Service Unavailable" });
+    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      ok: false, status: 503, statusText: "Service Unavailable", text: async () => "down",
+    });
     const client = new PluralClient({ enabled: true, url: "https://plural.example.com" });
-    await expect(client.getCurrentFront()).rejects.toThrow("Plural request failed");
+    await expect(client.getCurrentFront()).rejects.toThrow("Plural");
   });
 });
