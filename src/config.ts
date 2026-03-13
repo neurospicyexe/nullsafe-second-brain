@@ -51,7 +51,7 @@ const configSchema = z.object({
   }),
   http: z.object({
     port: z.number().int().min(1024).max(65535),
-    api_key: z.string().min(1),
+    api_key: z.string().min(32, "http.api_key must be at least 32 characters — generate with: openssl rand -hex 32"),
   }).optional(),
   couchdb: z.object({
     url: z.string().url(),
