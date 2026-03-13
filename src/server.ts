@@ -113,12 +113,12 @@ export function createServer(config: SecondBrainConfig) {
     // ── Retrieval tools ───────────────────────────────────────────────────────
     server.tool("sb_search",
       "Semantic vector search across all vault content — use to find notes, documents, memories, or observations by meaning rather than exact words. Good for 'what do we know about X' or 'find anything related to Y'.",
-      { query: z.string(), limit: z.number().optional() },
+      { query: z.string().max(10_000), limit: z.number().optional() },
       (args) => retrieval.sb_search(args).then(ok));
 
     server.tool("sb_recall",
       "Retrieve recent vault entries filtered by companion and/or content type — use to recall what was written about a specific companion (drevan, cypher, gaia) or to list recent notes, documents, or session summaries.",
-      { companion: z.string().nullable(), content_type: z.string().optional(), limit: z.number().optional() },
+      { companion: z.string().nullable(), content_type: z.string().max(64).optional(), limit: z.number().optional() },
       (args) => retrieval.sb_recall(args).then(ok));
 
     server.tool("sb_recent_patterns",
