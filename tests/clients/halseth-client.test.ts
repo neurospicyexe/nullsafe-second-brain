@@ -22,7 +22,7 @@ describe("HalsethClient", () => {
     expect(global.fetch).toHaveBeenCalledWith(
       "https://halseth.example.com/sessions/session-1",
       expect.objectContaining({
-        headers: expect.objectContaining({ "x-halseth-secret": "test-secret" }),
+        headers: expect.objectContaining({ "Authorization": "Bearer test-secret" }),
       })
     );
   });
@@ -54,8 +54,12 @@ describe("HalsethClient", () => {
     );
   });
 
-  it("throws on non-ok response", async () => {
-    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ ok: false, statusText: "Not Found" });
-    await expect(makeClient().getSession("bad")).rejects.toThrow("Halseth request failed");
+  it("throws on non-ok response with status code and path", async () => {
+    const mockError = { ok: false, status: 404, statusText: "Not Found", text: async () => "session not found" };
+    (global.fetch as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce(mockError)
+      .mockResolvedValueOnce(mockError);
+    await expect(makeClient().getSession("bad")).rejects.toThrow("404");
+    await expect(makeClient().getSession("bad")).rejects.toThrow("/sessions/bad");
   });
 });

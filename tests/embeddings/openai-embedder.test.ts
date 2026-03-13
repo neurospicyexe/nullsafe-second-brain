@@ -44,7 +44,9 @@ describe("OpenAIEmbedder", () => {
   it("throws on non-ok response", async () => {
     (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
       ok: false,
+      status: 401,
       statusText: "Unauthorized",
+      text: async () => "invalid api key",
     });
     const embedder = new OpenAIEmbedder({ model: "text-embedding-3-small", apiKey: "bad-key" });
     await expect(embedder.embed("test")).rejects.toThrow("OpenAI embeddings error");
