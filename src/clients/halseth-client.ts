@@ -8,10 +8,12 @@ export class HalsethClient {
 
   private async get<T>(path: string): Promise<T> {
     const response = await fetch(`${this.options.url}${path}`, {
+      signal: AbortSignal.timeout(15_000),
       headers: { "Authorization": `Bearer ${this.options.secret}` },
     });
     if (!response.ok) {
-      throw new Error(`Halseth request failed: ${response.statusText}`);
+      const body = await response.text().catch(() => "(unreadable)");
+      throw new Error(`Halseth ${path} → ${response.status} ${response.statusText}: ${body}`);
     }
     return response.json() as Promise<T>;
   }

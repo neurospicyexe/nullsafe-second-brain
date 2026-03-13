@@ -30,6 +30,7 @@ export class CouchDBAdapter implements VaultAdapter {
 
   private async getDoc(id: string): Promise<Record<string, unknown> | null> {
     const res = await fetch(`${this.baseUrl}/${encodeURIComponent(id)}`, {
+      signal: AbortSignal.timeout(15_000),
       headers: this.headers(),
     });
     if (res.status === 404) return null;
@@ -40,6 +41,7 @@ export class CouchDBAdapter implements VaultAdapter {
   private async putDoc(id: string, body: Record<string, unknown>): Promise<void> {
     const res = await fetch(`${this.baseUrl}/${encodeURIComponent(id)}`, {
       method: "PUT",
+      signal: AbortSignal.timeout(15_000),
       headers: this.headers(),
       body: JSON.stringify(body),
     });
@@ -109,6 +111,7 @@ export class CouchDBAdapter implements VaultAdapter {
   async list(dirPath = ""): Promise<string[]> {
     const prefix = dirPath ? (dirPath.endsWith("/") ? dirPath : dirPath + "/") : "";
     const res = await fetch(`${this.baseUrl}/_all_docs?include_docs=true`, {
+      signal: AbortSignal.timeout(30_000),
       headers: this.headers(),
     });
     if (!res.ok) throw new Error(`CouchDB _all_docs failed: ${res.status}`);

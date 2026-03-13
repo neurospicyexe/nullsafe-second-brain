@@ -54,7 +54,7 @@ describe("CouchDBAdapter.write", () => {
     const metaBody = JSON.parse(metaPutCall[1].body);
     expect(metaBody.path).toBe("test.md");
     expect(metaBody.children).toHaveLength(1);
-    expect(metaBody.deleted).toBe(false);
+    expect(metaBody.deleted).toBeUndefined(); // not set for new docs; only set to false on update
   });
 
   it("preserves ctime and passes _rev when updating existing doc", async () => {
@@ -88,16 +88,15 @@ describe("CouchDBAdapter.write", () => {
 });
 
 describe("CouchDBAdapter.read", () => {
-  it("reads and decodes base64 chunk content", async () => {
+  it("reads UTF-8 chunk content", async () => {
     const content = "hello world";
-    const b64 = Buffer.from(content).toString("base64");
     mockFetch.mockResolvedValueOnce({
       ok: true,
       json: async () => ({ _id: "test.md", children: ["h:abc123"], deleted: false }),
     });
     mockFetch.mockResolvedValueOnce({
       ok: true,
-      json: async () => ({ _id: "h:abc123", data: b64, type: "leaf" }),
+      json: async () => ({ _id: "h:abc123", data: content, type: "leaf" }),
     });
 
     const result = await adapter.read("test.md");
