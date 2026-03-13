@@ -109,15 +109,20 @@ Mobile / Desktop / any device (all sync directly to VPS)
 - **Fix 10 (2026-03-12):** CouchDB chunk `data` field was base64-encoded; LiveSync stores raw UTF-8 strings for text files. This caused the content to appear as base64 garbage in Obsidian. *Changed `data: slice.toString("base64")` → `slice.toString("utf-8")` and simplified `read()` to use data as-is.* Root cause confirmed by reading LiveSync source (livesync-commonlib `EntryManagerImpls.ts`): `{ _id: id, data: data, type: "leaf" }` where data is the raw string from the splitter.
 - **Fix 11 (2026-03-12):** Metadata `type` field was `"newnote"` for new docs. LiveSync source confirms `"newnote"` is for binary files; `.md` files should always be `"plain"`. *Changed to always `"plain"`.*
 - **Fix 12 (2026-03-12):** Metadata `size` field was base64 string length (e.g. 252) instead of raw byte count (e.g. 189). LiveSync's corruption check compares assembled chunk string length against `size` — mismatch = "corrupted (189 != 252)". *Changed to `buf.length` (UTF-8 byte count).*
+- **Fix 13 (2026-03-13):** Full OWASP + vibesec security audit pass. Applied: CORS restricted to claude.ai allowlist, security response headers, log injection sanitization, `api_key` minimum 32 chars, `mkdirSync` mode 0o700, path traversal audit logging, 15s `AbortSignal` timeouts on all external fetch calls, `escapeMd()` prompt injection protection in synthesis.ts, OAuth redirect_uri validation, OAuth client cap (50), refresh token rejection, bound query/content_type params in retrieval tools. *See Security section below for full findings table.*
+- **Fix 14 (2026-03-13):** `sb_run_patterns` and `sb_write_pattern_summary` always failed with "Not Found" — `halseth-client.ts` was calling `/sessions?days=N` and `/sessions/:id` which didn't exist in Halseth. Also `getRecentDeltas()` passed `?days=` which Halseth silently ignores, and `getHandover()` called `/handover/:id` (singular, no such route). *Added `GET /sessions` and `GET /sessions/:id` endpoints to Halseth. Fixed all three client methods: sessions use new routes, deltas fetch `?limit=200` and filter client-side by `created_at`, handover fetches list and finds by `session_id` client-side.*
+- **Fix 15 (2026-03-13):** Claude caches MCP session IDs and reuses them after server restarts. Fresh restart = empty session registry = every request rejected with 400. *Changed `mcpHandler` to accept any POST+initialize regardless of whether a session ID is present. When a stale ID is supplied it's reused as the session ID generator so the response echoes it back — client never notices the restart. Non-initialize requests with unknown IDs now return 404 (session gone, re-initialize) instead of 400.*
 
-**Current State (2026-03-12): FULLY WORKING ✓**
+**Current State (2026-03-13): FULLY WORKING ✓**
 - OAuth + MCP connection: **working** ✓
 - CouchDB writes: **working** ✓
-- Tool execution: **working** ✓ (`sb_save_document` confirmed)
+- Tool execution: **working** ✓ (`sb_save_document`, `sb_run_patterns` confirmed)
 - LiveSync → Obsidian sync: **working** ✓ (confirmed end-to-end 2026-03-12)
+- Session persistence across restarts: **working** ✓ (Fix 15)
 
 **Verify**
 - [x] `sb_save_document` succeeds and file appears in Obsidian within seconds ✓
+- [x] `sb_run_patterns` no longer errors with "Not Found" ✓
 - [ ] Reboot VPS → second-brain and CouchDB both come back automatically
 - [ ] Rotate `http.api_key` in config (current key was exposed in chat on 2026-03-11)
 
