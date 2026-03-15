@@ -20,7 +20,7 @@
     { "type": "observation", "destination": "raziel/" },
     { "type": "session_summary", "destination": "raziel/" }
   ],
-  "patterns": { "enabled": true, "hearth_summary": true, "hearth_summary_path": "nullsafe/system/_recent-patterns.md" },
+  "patterns": { "enabled": true, "hearth_summary": true, "hearth_summary_path": "nullsafe/nullsystem/_recent-patterns.md" },
   "embeddings": { "provider": "openai", "model": "text-embedding-3-small", "api_key": "" },
   "http": { "port": 3001, "api_key": "replace-with-a-strong-random-secret" },
   "couchdb": {
