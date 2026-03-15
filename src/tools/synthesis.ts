@@ -39,34 +39,34 @@ export function buildSynthesisTools(
       return { path };
     },
 
-    async sb_run_patterns() {
+    async sb_run_patterns(args: { summary?: boolean } = {}) {
       const [sessions, deltas] = await Promise.all([
         halseth.getRecentSessions(7),
         halseth.getRecentDeltas(7),
       ]);
-      const lines = [
-        `# Pattern Observations — ${new Date().toLocaleDateString()}`,
-        ``,
-        `**Sessions this week:** ${sessions.length}`,
-        `**Relational deltas this week:** ${deltas.length}`,
-      ];
-      const content = lines.join("\n");
-      const path = `${sessionDestination}patterns-${Date.now()}.md`;
-      await indexer.write({ path, content, companion: null, content_type: "observation", tags: ["patterns"] });
-      return { path };
-    },
-
-    async sb_write_pattern_summary() {
-      const sessions = await halseth.getRecentSessions(7);
-      const lines = [
-        `# Recent Patterns`,
-        `*Updated ${new Date().toLocaleString()}*`,
-        ``,
-        `**Sessions this week:** ${sessions.length}`,
-      ];
-      const content = lines.join("\n");
-      await indexer.write({ path: heartSummaryPath, content, companion: null, content_type: "observation", tags: ["hearth", "patterns"], overwrite: true });
-      return { path: heartSummaryPath };
+      if (args.summary) {
+        const lines = [
+          `# Recent Patterns`,
+          `*Updated ${new Date().toLocaleString()}*`,
+          ``,
+          `**Sessions this week:** ${sessions.length}`,
+          `**Relational deltas this week:** ${deltas.length}`,
+        ];
+        const content = lines.join("\n");
+        await indexer.write({ path: heartSummaryPath, content, companion: null, content_type: "observation", tags: ["hearth", "patterns"], overwrite: true });
+        return { path: heartSummaryPath };
+      } else {
+        const lines = [
+          `# Pattern Observations — ${new Date().toLocaleDateString()}`,
+          ``,
+          `**Sessions this week:** ${sessions.length}`,
+          `**Relational deltas this week:** ${deltas.length}`,
+        ];
+        const content = lines.join("\n");
+        const path = `${sessionDestination}patterns-${Date.now()}.md`;
+        await indexer.write({ path, content, companion: null, content_type: "observation", tags: ["patterns"] });
+        return { path };
+      }
     },
   };
 }

@@ -75,14 +75,9 @@ export function createServer(config: SecondBrainConfig) {
     // Capture tools
     // ── Capture tools ────────────────────────────────────────────────────────
     server.tool("sb_save_document",
-      "Write a permanent document into the second brain vault — use for companion memory, growth records, relationship notes, organizational knowledge, or any content that should persist long-term. Optionally scoped to a companion (drevan, cypher, gaia) via the companion param.",
-      { content: z.string().max(MAX_CONTENT_LENGTH), path: z.string().max(256).optional(), companion: z.string().max(64).optional(), tags: z.array(z.string()).max(50).optional() },
+      "Write content into the second brain vault. Use content_type='document' (default) for permanent records — companion memory, growth notes, relationship history, org knowledge. Use content_type='note' for lighter in-the-moment captures — session insights, quick reflections, brief thoughts. Optionally scoped to a companion (drevan, cypher, gaia).",
+      { content: z.string().max(MAX_CONTENT_LENGTH), path: z.string().max(256).optional(), companion: z.string().max(64).optional(), tags: z.array(z.string()).max(50).optional(), content_type: z.enum(["document", "note"]).optional() },
       (args) => run("sb_save_document", () => capture.sb_save_document(args)));
-
-    server.tool("sb_save_note",
-      "Write a note or quick capture into the vault — use for session insights, reflections, brief thoughts, or anything the user or a companion wants to remember. Lighter than a document; good for in-the-moment captures.",
-      { content: z.string().max(MAX_CONTENT_LENGTH), path: z.string().max(256).optional(), companion: z.string().max(64).optional(), tags: z.array(z.string()).max(50).optional() },
-      (args) => run("sb_save_note", () => capture.sb_save_note(args)));
 
     server.tool("sb_save_study",
       "Save learning material, research, or study notes into the vault — use when the user is learning something new, exploring a topic, or wants to retain educational content. Organized by subject.",
@@ -101,14 +96,9 @@ export function createServer(config: SecondBrainConfig) {
       (args) => synthesis.sb_synthesize_session(args).then(ok));
 
     server.tool("sb_run_patterns",
-      "Analyze recent sessions and relational deltas from Halseth (last 7 days) and write a pattern observation note to the vault — use to surface trends, growth arcs, or recurring themes across the system.",
-      {},
-      () => synthesis.sb_run_patterns().then(ok));
-
-    server.tool("sb_write_pattern_summary",
-      "Regenerate the hearth pattern summary file — a running overview of recent patterns visible in the vault. Use to refresh the summary after significant activity or when the user wants a current snapshot.",
-      {},
-      () => synthesis.sb_write_pattern_summary().then(ok));
+      "Analyze recent sessions and relational deltas from Halseth (last 7 days) and write a pattern observation to the vault. Default (summary=false): appends a new timestamped log entry. Pass summary=true to overwrite the hearth summary file with a current snapshot — use this to refresh the overview visible in sb_recent_patterns.",
+      { summary: z.boolean().optional() },
+      (args) => synthesis.sb_run_patterns(args).then(ok));
 
     // ── Retrieval tools ───────────────────────────────────────────────────────
     server.tool("sb_search",
@@ -131,11 +121,6 @@ export function createServer(config: SecondBrainConfig) {
       "Return the health and status of the second brain system — use to check if the vector store, vault adapter, and embeddings are working. Shows document count and system configuration.",
       {},
       () => system.sb_status().then(ok));
-
-    server.tool("sb_reindex_note",
-      "Re-embed and re-index a single vault file by path — use when a note was edited outside of the MCP tools and needs its vector index updated so it shows up correctly in search.",
-      { path: z.string() },
-      (args) => system.sb_reindex_note(args).then(ok));
 
     server.tool("sb_index_rebuild",
       "Rebuild the vector index for a list of vault file paths — use to re-index multiple files at once after bulk edits, or to repair the search index if results seem stale or missing.",

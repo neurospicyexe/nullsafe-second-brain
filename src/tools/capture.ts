@@ -13,19 +13,12 @@ function ensureMd(path: string): string {
 
 export function buildCaptureTools(indexer: Indexer, resolver: RouteResolver) {
   return {
-    async sb_save_document(args: { path?: string; content: string; companion?: string; tags?: string[] }) {
+    async sb_save_document(args: { path?: string; content: string; companion?: string; tags?: string[]; content_type?: "document" | "note" }) {
       const companion = args.companion?.toLowerCase() ?? null;
       const tags = args.tags ?? [];
-      const finalPath = ensureMd(args.path ?? `${resolver.resolve({ companion, type: "document", tags })}${timestamp()}-document.md`);
-      await indexer.write({ path: finalPath, content: args.content, companion, content_type: "document", tags });
-      return { path: finalPath };
-    },
-
-    async sb_save_note(args: { path?: string; content: string; companion?: string; tags?: string[] }) {
-      const companion = args.companion?.toLowerCase() ?? null;
-      const tags = args.tags ?? [];
-      const finalPath = ensureMd(args.path ?? `${resolver.resolve({ companion, type: "note", tags })}${timestamp()}-note.md`);
-      await indexer.write({ path: finalPath, content: args.content, companion, content_type: "note", tags });
+      const type = args.content_type ?? "document";
+      const finalPath = ensureMd(args.path ?? `${resolver.resolve({ companion, type, tags })}${timestamp()}-${type}.md`);
+      await indexer.write({ path: finalPath, content: args.content, companion, content_type: type, tags });
       return { path: finalPath };
     },
 

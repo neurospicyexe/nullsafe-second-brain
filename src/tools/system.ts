@@ -14,11 +14,6 @@ export function buildSystemTools(store: VectorStore, indexer: Indexer, adapter: 
       };
     },
 
-    async sb_reindex_note(args: { path: string }) {
-      await indexer.reindex(args.path);
-      return { path: args.path, status: "reindexed" as const };
-    },
-
     async sb_index_rebuild(args: { paths: string[] }) {
       for (const path of args.paths) {
         await indexer.reindex(path);

@@ -11,7 +11,7 @@ export function setupTriggers(config: SecondBrainConfig, synthesis: SynthesisToo
       try {
         await synthesis.sb_run_patterns();
         if (config.patterns.hearth_summary) {
-          await synthesis.sb_write_pattern_summary();
+          await synthesis.sb_run_patterns({ summary: true });
         }
       } catch (err) {
         console.error("[second-brain] Scheduled synthesis error:", err);
