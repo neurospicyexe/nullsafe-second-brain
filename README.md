@@ -1,8 +1,8 @@
 # nullsafe-second-brain
 
-A local memory server for the Nullsafe companion system. It reads session data from Halseth, synthesizes it into an [Obsidian](https://obsidian.md) vault, and maintains a searchable index so companions can retrieve memories semantically across sessions.
+A memory server for the Nullsafe companion system. It reads session data from Halseth, synthesizes it into an [Obsidian](https://obsidian.md) vault, and maintains a searchable index so companions can retrieve memories semantically across sessions.
 
-Runs locally on your machine (not in the cloud). Connects to Claude via the MCP protocol.
+Can run locally (stdio transport for Claude Desktop) or on a VPS (HTTP/OAuth transport for Claude.ai). Connects to Claude via the MCP protocol.
 
 ---
 
@@ -117,6 +117,14 @@ Claude will call `sb_status` and tell you how many notes are indexed. If it's yo
 | `sb_synthesize_session` | Pull a Halseth session and write a summary note to the vault |
 | `sb_run_patterns` | Analyze recent Halseth data and write observation notes |
 | `sb_write_pattern_summary` | Generate a `_recent-patterns.md` for the Hearth dashboard |
+
+**Vault browsing:**
+
+| Tool | What it does |
+|------|-------------|
+| `sb_list` | List notes in a vault folder |
+| `sb_read` | Read the content of a vault note |
+| `sb_move` | Move a note to a different folder |
 
 **Maintenance:**
 

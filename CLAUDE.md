@@ -161,25 +161,27 @@ Enable with: `sudo systemctl enable --now second-brain`
 
 ### Open Findings (2026-03-13 OWASP Audit)
 
+> **Fix 13 (2026-03-13) applied:** C1, C2, H1, H3, M2, L1, L2 — marked ✅ below. Remaining items are still open.
+
 #### Critical
 | # | Location | Issue | Fix |
 |---|----------|-------|-----|
-| C1 | `src/clients/halseth-client.ts`, `src/clients/plural-client.ts`, `src/adapters/couchdb-adapter.ts` | No `AbortSignal` timeout on any external `fetch()` call — server hangs indefinitely if external service is slow (effective DoS). `openai-embedder.ts` already does this correctly — copy that pattern. | Add `signal: AbortSignal.timeout(15_000)` to every `fetch()` |
-| C2 | `src/index-http.ts:67` | `cors({ origin: true, credentials: true })` allows any origin to make credentialed requests — CSRF attack surface. Any page the user visits can call MCP tools on their behalf. | Restrict to `origin: ["https://claude.ai", "https://mcp.softcrashentity.com"]` |
+| ~~C1~~ | `src/clients/halseth-client.ts`, `src/clients/plural-client.ts`, `src/adapters/couchdb-adapter.ts` | No `AbortSignal` timeout on any external `fetch()` call — server hangs indefinitely if external service is slow (effective DoS). | Add `signal: AbortSignal.timeout(15_000)` to every `fetch()` | ✅ Fixed (Fix 13) |
+| ~~C2~~ | `src/index-http.ts:67` | `cors({ origin: true, credentials: true })` allows any origin to make credentialed requests — CSRF attack surface. | Restrict to `origin: ["https://claude.ai", "https://mcp.softcrashentity.com"]` | ✅ Fixed (Fix 13) |
 
 #### High
 | # | Location | Issue | Fix |
 |---|----------|-------|-----|
-| H1 | `src/tools/synthesis.ts:4-15` | Halseth session fields embedded into vault markdown with no escaping — prompt injection pathway: compromised Halseth → vault → RAG → Claude context. | Escape all `String(session.*)` values: strip markdown specials + newlines + clamp to 1000 chars |
+| ~~H1~~ | `src/tools/synthesis.ts:4-15` | Halseth session fields embedded into vault markdown with no escaping — prompt injection pathway. | Escape all `String(session.*)` values via `escapeMd()` | ✅ Fixed (Fix 13) |
 | H2 | `src/clients/halseth-client.ts:16`, `src/clients/plural-client.ts:20`, `src/adapters/couchdb-adapter.ts` (multiple) | All external HTTP responses cast directly to types with no Zod validation. Malformed/adversarial payloads flow straight into vault writes and vector store. | Add Zod schemas and `.parse()` on every `response.json()` — Zod is already a dep |
-| H3 | `src/http-auth.ts:5-8` | If `config.http.api_key` is empty string, auth is silently disabled (`if (!apiKey) return true`). No warning, no error. | Validate in `loadConfig()` that `http.api_key` is ≥32 chars if http block is present |
+| ~~H3~~ | `src/http-auth.ts:5-8` | If `config.http.api_key` is empty string, auth is silently disabled. | Validate in `loadConfig()` that `http.api_key` is ≥32 chars | ✅ Fixed (Fix 13) — `z.string().min(32, ...)` in config.ts |
 | H4 | `src/oauth-provider.ts:86-91` | Every OAuth client receives the same shared `config.http.api_key` as access token. One token leak compromises all clients. TTL is 1 year. | Generate unique per-client tokens; shorten TTL to 1h with refresh support |
 
 #### Medium
 | # | Location | Issue | Fix |
 |---|----------|-------|-----|
 | M1 | `src/index-http.ts:55-57` | OAuth issuer URL and resource server URL hardcoded as `softcrashentity.com`. Breaks any alternate deployment. | Move to `config.http.public_url` and derive URLs from it |
-| M2 | `src/server.ts` (retrieval tool defs) | `query: z.string()` and `content_type: z.string()` have no `.max()` — unbounded strings hit OpenAI embeddings API (cost amplification + DoS) | Add `.max(10_000)` to query, `.max(64)` to content_type |
+| ~~M2~~ | `src/server.ts` (retrieval tool defs) | `query: z.string()` and `content_type: z.string()` have no `.max()` — unbounded strings hit OpenAI embeddings API. | Add `.max(10_000)` to query, `.max(64)` to content_type | ✅ Fixed (Fix 13) |
 | M3 | `src/store/vector-store.ts` / `src/tools/retrieval.ts:18-22` | `store.getAll()` loads all embeddings into memory then sorts in JS — O(n) full scan. Will OOM/hang at scale (>50k chunks). | Acceptable for now; track for future. Consider `sqlite-vec` or score threshold pre-filter |
 | M4 | `src/triggers.ts:27-28` | Event-driven triggers accept config but silently do nothing if enabled — no warning, no error. | Throw `Error("Event-driven triggers not yet implemented")` if enabled |
 | M5 | `second-brain.config.json` (runtime) | Config stores `halseth.secret`, `obsidian_rest.api_key`, `embeddings.api_key`, `http.api_key`, `couchdb.password` in plaintext JSON. | Enforce `chmod 600`; consider env vars for secrets |
@@ -188,58 +190,60 @@ Enable with: `sudo systemctl enable --now second-brain`
 #### Low
 | # | Location | Issue | Fix |
 |---|----------|-------|-----|
-| L1 | `src/server.ts:36` | `mkdirSync(dbDir, { recursive: true })` — no `mode` argument, inherits umask | Add `mode: 0o700` |
-| L2 | `src/adapters/filesystem-adapter.ts:14` | Path traversal attempts throw but leave no audit trail | `console.error(\`[security] Path traversal blocked: ${rel}\`)` before throw |
+| ~~L1~~ | `src/server.ts:36` | `mkdirSync(dbDir, { recursive: true })` — no `mode` argument, inherits umask | Add `mode: 0o700` | ✅ Fixed (Fix 13) |
+| ~~L2~~ | `src/adapters/filesystem-adapter.ts:14` | Path traversal attempts throw but leave no audit trail | `console.error(...)` before throw | ✅ Fixed (Fix 13) |
 | L3 | `src/clients/halseth-client.ts:13-14` | Error message only includes status text, not code or body — hard to debug | Include status code + response body in error |
 | L4 | `src/oauth-provider.ts:70-84` | `challengeForAuthorizationCode()` doesn't rate-limit or consume the code — minor replay surface | Track challenge count per code; reject after 3 attempts |
 | L5 | `src/store/vector-store.ts` | SQLite DB is unencrypted on disk at `~/.nullsafe-second-brain/vector-store.db` | Document that DB should live on encrypted volume |
 
 ### Open Findings (2026-03-13 Vibesec Deep Scan)
 
+> **Fix 13 (2026-03-13) applied:** V-H1, V-M2, V-M3, V-L1, V-I1 — marked ✅ below. V-M1 partially fixed (id encoded, date not yet validated).
+
 #### High
 | # | Location | Issue | Fix |
 |---|----------|-------|-----|
-| V-H1 | `src/oauth-provider.ts:60-63` | OAuth `redirectUri` used for redirect without validating against the client's registered `redirect_uris` — authorization codes can be sent to attacker-controlled URIs. | Check `params.redirectUri` is in `client.redirect_uris` before redirecting; return 400 if not |
+| ~~V-H1~~ | `src/oauth-provider.ts:60-63` | OAuth `redirectUri` used for redirect without validating against the client's registered `redirect_uris`. | Check `params.redirectUri` is in `client.redirect_uris` before redirecting | ✅ Fixed (Fix 13) |
 
 #### Medium
 | # | Location | Issue | Fix |
 |---|----------|-------|-----|
-| V-M1 | `src/clients/halseth-client.ts:19-37` | User-supplied `id` and `date` values interpolated directly into URL paths/query strings (`/sessions/${id}`, `?date=${date}`) — path traversal and query injection into Halseth API. | `encodeURIComponent(id)` for path segments; validate date against `/^\d{4}-\d{2}-\d{2}$/` before use |
-| V-M2 | `src/oauth-provider.ts:94-103` | `exchangeRefreshToken()` accepts any string and returns the master access token — no validation. No refresh tokens are issued, so the endpoint is dormant, but it's wide open if the SDK ever calls it. | Throw `"Refresh tokens are not supported"` to reject all refresh attempts |
-| V-M3 | `src/index-http.ts` | No security response headers set — missing `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`. Caddy may add some, but app layer should provide defense-in-depth. | Add middleware setting `nosniff`, `DENY`, `no-referrer` before routes |
+| V-M1 | `src/clients/halseth-client.ts` | User-supplied `id` interpolated into URL paths; `date` not yet validated against regex. | `encodeURIComponent(id)` ✅ done; validate date against `/^\d{4}-\d{2}-\d{2}$/` still open |
+| ~~V-M2~~ | `src/oauth-provider.ts:94-103` | `exchangeRefreshToken()` accepted any string and returned the master access token. | Throws `"Refresh tokens are not supported"` | ✅ Fixed (Fix 13) |
+| ~~V-M3~~ | `src/index-http.ts` | No security response headers set. | `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy` middleware added | ✅ Fixed (Fix 13) |
 
 #### Low
 | # | Location | Issue | Fix |
 |---|----------|-------|-----|
-| V-L1 | `src/index-http.ts:117` | `req.body?.method` logged without newline sanitization — log injection possible (server-side only). | `.replace(/[\r\n]/g, " ").slice(0, 64)` before logging |
+| ~~V-L1~~ | `src/index-http.ts:117` | `req.body?.method` logged without newline sanitization — log injection. | Sanitized before logging | ✅ Fixed (Fix 13) |
 | V-L2 | `src/index-http.ts:64` | `trust proxy: 1` means Caddy is a **required** security boundary — if app port is ever directly reachable, source IP can be spoofed. | Document: UFW must block external access to app port; Caddy is not optional |
 
 #### Info
 | # | Location | Issue | Fix |
 |---|----------|-------|-----|
-| V-I1 | `src/oauth-provider.ts:35-44` | Dynamic client registration is fully open — any caller can register a new client, list grows unboundedly. By design for Claude.ai, but worth a max-client cap. | Add `if (this.clients.size > 50) throw new Error("Client limit reached")` |
+| ~~V-I1~~ | `src/oauth-provider.ts:35-44` | Dynamic client registration fully open — list grows unboundedly. | `if (this.clients.size >= 50) throw` | ✅ Fixed (Fix 13) |
 
 ### Fix Priority Order
-1. **Rotate `http.api_key` on VPS right now** (already compromised)
-2. C2 — CORS restriction (2-line fix)
-3. C1 — Fetch timeouts (4 files, copy openai-embedder pattern)
-4. H1 — Escape Halseth data in synthesis.ts
-5. V-H1 — OAuth redirect_uri validation
-6. H3 — Empty API key guard in loadConfig()
-7. V-M1 — Halseth URL path/query injection
-8. V-M2 — Reject refresh token endpoint
-9. V-M3 — Security response headers
-10. H2 — Zod validation on external HTTP responses
-11. H4 — Per-client OAuth tokens
-12. M1–M6, L1–L5, V-L1, V-L2 — lower priority cleanup
+1. **Rotate `http.api_key` on VPS right now** (already compromised — still open)
+2. ~~C2 — CORS restriction~~ ✅ Fixed (Fix 13)
+3. ~~C1 — Fetch timeouts~~ ✅ Fixed (Fix 13)
+4. ~~H1 — Escape Halseth data in synthesis.ts~~ ✅ Fixed (Fix 13)
+5. ~~V-H1 — OAuth redirect_uri validation~~ ✅ Fixed (Fix 13)
+6. ~~H3 — Empty API key guard in loadConfig()~~ ✅ Fixed (Fix 13)
+7. V-M1 — Halseth URL date injection still open (id encoding done)
+8. ~~V-M2 — Reject refresh token endpoint~~ ✅ Fixed (Fix 13)
+9. ~~V-M3 — Security response headers~~ ✅ Fixed (Fix 13)
+10. H2 — Zod validation on external HTTP responses (still open)
+11. H4 — Per-client OAuth tokens (still open)
+12. M1, M4–M6, L3–L5, V-L2 — lower priority cleanup (still open)
 
 ### Known Bugs (not security — functional)
 
 | # | Tool | Symptom | Root Cause | Status |
 |---|------|---------|------------|--------|
-| B1 | `sb_run_patterns`, `sb_write_pattern_summary` | "Halseth request failed: Not Found" — tool always errors | `halseth-client.ts::getRecentSessions()` calls `GET /sessions?days=7` but `/sessions` does not exist in Halseth. Session data lives inside `GET /presence`. Reported by Drevan 2026-03-13. | Open — see Halseth client mismatch table below |
-| B2 | `sb_run_patterns` | `days` filter silently ignored | `getRecentDeltas()` calls `GET /deltas?days=7` — endpoint exists but `days` is not a valid param (valid: `limit`, `valence`, `agent`). Returns last 20 deltas regardless of requested window. | Open — use `limit` param instead or fetch all and filter by `created_at` |
-| B3 | any tool using `getHandover(id)` | Would 404 if called | `getHandover(id)` calls `GET /handover/${id}` (singular) but Halseth only has `GET /handovers` (list, no id lookup). | Open — no per-id handover endpoint exists; use list and filter client-side |
+| ~~B1~~ | `sb_run_patterns`, `sb_write_pattern_summary` | "Halseth request failed: Not Found" — tool always errors | `halseth-client.ts::getRecentSessions()` calls `GET /sessions?days=7` but `/sessions` did not exist in Halseth. | ✅ Fixed (Fix 14, 2026-03-13) — Halseth `GET /sessions` and `GET /sessions/:id` added; client updated |
+| ~~B2~~ | `sb_run_patterns` | `days` filter silently ignored | `getRecentDeltas()` called `GET /deltas?days=7` — `days` is not a valid param. Returns last 20 regardless. | ✅ Fixed (Fix 14, 2026-03-13) — now fetches `?limit=200` and filters client-side by `created_at` |
+| ~~B3~~ | any tool using `getHandover(id)` | Would 404 if called | `getHandover(id)` called `GET /handover/${id}` but Halseth only has `GET /handovers` (list, no id lookup). | ✅ Fixed (Fix 14, 2026-03-13) — now fetches list and filters by `session_id` client-side |
 
 ### Halseth Client Endpoint Map (confirmed 2026-03-13)
 
@@ -247,8 +251,8 @@ Cross-reference against `C:\dev\halseth` source. All second-brain → Halseth HT
 
 | Client method | URL called | Halseth reality | Status |
 |---|---|---|---|
-| `getRecentSessions(days)` | `GET /sessions?days=N` | **Does not exist.** Session data is in `GET /presence` response. | ❌ Wrong |
-| `getRecentDeltas(days)` | `GET /deltas?days=N` | `GET /deltas` exists. Valid params: `limit`, `valence`, `agent`. `days` is silently ignored. | ⚠️ Partial |
-| `getHandover(id)` | `GET /handover/${id}` | Only `GET /handovers` (list) exists — no per-id lookup. | ❌ Wrong |
+| `getRecentSessions(days)` | `GET /sessions?days=N` | `GET /sessions` added to Halseth 2026-03-13. | ✅ Fixed (Fix 14) |
+| `getRecentDeltas(days)` | `GET /deltas?limit=200` (then filter client-side) | `GET /deltas` exists. Fetches 200, filters by `created_at` client-side. | ✅ Fixed (Fix 14) |
+| `getHandover(id)` | `GET /handovers?limit=100` (then filter by `session_id`) | `GET /handovers` list endpoint used; match found client-side. | ✅ Fixed (Fix 14) |
 | `getRoutines(date)` | `GET /routines?date=YYYY-MM-DD` | `GET /routines?date=YYYY-MM-DD` — correct. | ✅ OK |
-| `getSession(id)` | `GET /sessions/${id}` | `/sessions` route does not exist at all. | ❌ Wrong |
+| `getSession(id)` | `GET /sessions/${encodeURIComponent(id)}` | `GET /sessions/:id` added to Halseth 2026-03-13. | ✅ Fixed (Fix 14) |
