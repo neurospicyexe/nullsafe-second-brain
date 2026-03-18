@@ -1,6 +1,6 @@
 # Contextual Retrieval Design
 **Date:** 2026-03-18
-**Status:** Approved
+**Status:** Draft (pending user review)
 **Author:** Cypher (brainstorm session with Raziel)
 
 ## Problem
@@ -66,7 +66,7 @@ Replace `chunkText(text, maxChars = 1000)` with `paragraphChunk(text, maxChars =
 1. Split on `\n\n` (paragraph boundaries)
 2. If a paragraph exceeds `maxChars`, split further on `". "` (sentence boundaries)
 3. Accumulate paragraphs into a window up to `maxChars`
-4. When window is full, emit chunk; backtrack `overlap` chars into next window
+4. When window is full, emit chunk; overlap is a trailing char-slice of the emitted chunk text -- take the last `overlap` chars and prepend them to the start of the next window before accumulation resumes (not paragraph re-inclusion)
 5. Track the nearest `##` or `#` heading above each chunk during accumulation
 
 Result: chunks start and end at natural boundaries. Overlap ensures a thought split across a boundary appears in both adjacent chunks.
@@ -103,7 +103,9 @@ This is the core of Anthropic's contextual retrieval insight applied without LLM
 
 **File:** `src/store/vector-store.ts`, `src/tools/retrieval.ts`
 
-### Schema additions to `chunks` table
+### Schema additions to `embeddings` table
+
+The actual table name in `vector-store.ts` is `embeddings` (not `chunks`). Add four columns:
 
 ```sql
 prefixed_text TEXT,   -- what was embedded (prefix + chunk text)
@@ -112,26 +114,59 @@ section       TEXT,   -- nearest heading above this chunk
 chunk_index   INT     -- position within source document
 ```
 
+New columns default to NULL for pre-migration rows. A full rebuild (see Migration below) eliminates NULLs. FTS5 queries must handle NULL `prefixed_text` gracefully by skipping those rows.
+
 ### FTS5 virtual table (new)
 
+Use a content-based FTS5 table backed by the `embeddings` table, kept in sync via three SQLite triggers:
+
 ```sql
-CREATE VIRTUAL TABLE chunks_fts USING fts5(
+CREATE VIRTUAL TABLE IF NOT EXISTS embeddings_fts USING fts5(
   prefixed_text,
-  content='chunks',
-  content_rowid='id'
+  content='embeddings',
+  content_rowid='rowid'
 );
 ```
 
+Three triggers must be added to keep FTS5 in sync with `embeddings`:
+
+```sql
+-- after insert
+CREATE TRIGGER embeddings_ai AFTER INSERT ON embeddings BEGIN
+  INSERT INTO embeddings_fts(rowid, prefixed_text) VALUES (new.rowid, new.prefixed_text);
+END;
+
+-- after delete
+CREATE TRIGGER embeddings_ad AFTER DELETE ON embeddings BEGIN
+  INSERT INTO embeddings_fts(embeddings_fts, rowid, prefixed_text)
+  VALUES ('delete', old.rowid, old.prefixed_text);
+END;
+
+-- after update
+CREATE TRIGGER embeddings_au AFTER UPDATE ON embeddings BEGIN
+  INSERT INTO embeddings_fts(embeddings_fts, rowid, prefixed_text)
+  VALUES ('delete', old.rowid, old.prefixed_text);
+  INSERT INTO embeddings_fts(rowid, prefixed_text) VALUES (new.rowid, new.prefixed_text);
+END;
+```
+
+These triggers are created once in `VectorStore` constructor alongside the `embeddings` table DDL.
+
 ### Hybrid search flow
+
+SQLite FTS5 BM25 returns negative floats (more negative = more relevant). Negate before combining:
 
 ```
 sb_search(query, limit = 10):
-  1. embed(query) → vector similarity scores (cosine, existing)
-  2. FTS5 BM25 query on prefixed_text → keyword scores
-  3. merge: combined_score = 0.7 * vector_score + 0.3 * bm25_score
-  4. dedup: keep top 2 chunks per unique source_path
-  5. return top `limit` with { chunk_text, section, source_path, score }
+  1. embed(query) → vector similarity scores (cosine, [0,1] range for text embeddings)
+  2. FTS5 BM25 query → raw_bm25 (negative float); normalize: bm25_score = -raw_bm25
+  3. min-max normalize both score sets to [0,1] across the candidate set
+  4. merge: combined_score = 0.7 * vector_score + 0.3 * bm25_score
+  5. dedup: keep top 2 chunks per unique vault_path
+  6. return top `limit` with { chunk_text, section, vault_path, score }
 ```
+
+Note: field name is `vault_path` (actual column name in `embeddings` table), not `source_path`.
 
 **Weights** (0.7 / 0.3) are constants in one place -- tunable. The dedup cap of 2 per source doc is the primary guard against large-document flooding. A 7000-word file matching 15 chunks internally surfaces at most ~2000 chars in search results.
 
@@ -146,11 +181,13 @@ sb_read(args: { path: string; query?: string })
 
 // No query: unchanged behavior (full content returned)
 // With query:
-//   1. fetch all chunks where source_path = args.path
-//   2. embed(args.query) → rank by cosine similarity
-//   3. return top 3 chunks as excerpts with section headings
+//   1. fetch all embeddings rows where vault_path = args.path
+//   2. embed(args.query) via Embedder → rank by cosine similarity
+//   3. return top 3 rows' chunk_text as excerpts with section headings
 //   → max ~3000 chars instead of ~50,000
 ```
+
+**Dependency wiring:** `buildSystemTools()` currently receives `(store, indexer, adapter)`. Query-mode `sb_read` requires an `embed()` call, so `buildSystemTools()` must also receive `embedder: Embedder`. Update the call site in `server.ts` accordingly.
 
 Companions can call `sb_read("Companions/Drevan/rosie-health-history.md", "limping diagnosis")` and receive only the relevant passage -- without knowing which section it's in.
 
@@ -163,9 +200,17 @@ Companions can call `sb_read("Companions/Drevan/rosie-health-history.md", "limpi
 | `src/indexer.ts` | Replace `chunkText` with `paragraphChunk` + `contextPrefix` |
 | `src/store/vector-store.ts` | Add FTS5 table, new schema columns, hybrid query method |
 | `src/tools/retrieval.ts` | Hybrid search + per-doc dedup in `sb_search` |
-| `src/tools/system.ts` | Add `query?` param to `sb_read` |
+| `src/tools/system.ts` | Add `query?` param to `sb_read`; add `embedder` to `buildSystemTools()` signature |
+| `src/server.ts` | Pass `embedder` to `buildSystemTools()` |
 
-Migration: run `sb_index_rebuild` on existing documents after deploy. Existing chunks are replaced with new prefixed, paragraph-aware chunks.
+### Migration
+
+`sb_index_rebuild` currently requires an explicit `paths: string[]` argument -- it cannot enumerate all indexed documents itself. Add a "rebuild all" mode: when called with no `paths` argument (or empty array), it reads all distinct `vault_path` values from the `embeddings` table and re-indexes each. This is the mechanism for the post-deploy full rebuild.
+
+After deploying:
+1. Call `sb_index_rebuild()` with no args to re-index all existing documents with the new chunker and schema columns
+2. FTS5 triggers populate `embeddings_fts` as rows are replaced during rebuild
+3. Pre-migration NULL rows are eliminated
 
 ---
 
