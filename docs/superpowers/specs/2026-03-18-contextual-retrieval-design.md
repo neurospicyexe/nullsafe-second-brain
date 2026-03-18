@@ -205,12 +205,17 @@ Companions can call `sb_read("Companions/Drevan/rosie-health-history.md", "limpi
 
 ### Migration
 
-`sb_index_rebuild` currently requires an explicit `paths: string[]` argument -- it cannot enumerate all indexed documents itself. Add a "rebuild all" mode: when called with no `paths` argument (or empty array), it reads all distinct `vault_path` values from the `embeddings` table and re-indexes each. This is the mechanism for the post-deploy full rebuild.
+Migration is purely additive -- no forced rebuild, no data loss risk.
 
-After deploying:
-1. Call `sb_index_rebuild()` with no args to re-index all existing documents with the new chunker and schema columns
-2. FTS5 triggers populate `embeddings_fts` as rows are replaced during rebuild
-3. Pre-migration NULL rows are eliminated
+1. `ALTER TABLE embeddings ADD COLUMN` for the four new columns -- all default NULL
+2. Create `embeddings_fts` virtual table and the three triggers
+3. Deploy
+
+Existing rows continue working via vector search exactly as before. New writes automatically get paragraph-aware chunks, context prefixes, FTS5 indexing, and the new columns from day one. Old rows degrade gracefully: FTS5 skips NULL `prefixed_text` rows, vector search is unaffected.
+
+**Selective upgrade:** to get contextual retrieval benefits for a specific existing document, call `sb_index_rebuild(["path/to/doc.md"])` on that path. The document is re-indexed with the new chunker and the old rows for that path are replaced. Do this only when desired -- there is no requirement to upgrade existing content.
+
+**No rebuild-all mode.** A full forced rebuild risks partial state if interrupted. Selective per-document rebuild is the intended upgrade path.
 
 ---
 
