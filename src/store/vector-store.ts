@@ -68,21 +68,30 @@ export class VectorStore {
 
     // Triggers to keep FTS5 in sync
     this.db.prepare(`
-      CREATE TRIGGER IF NOT EXISTS embeddings_ai AFTER INSERT ON embeddings BEGIN
+      CREATE TRIGGER IF NOT EXISTS embeddings_ai AFTER INSERT ON embeddings WHEN new.prefixed_text IS NOT NULL BEGIN
         INSERT INTO embeddings_fts(rowid, prefixed_text) VALUES (new.rowid, new.prefixed_text);
       END
     `).run();
     this.db.prepare(`
-      CREATE TRIGGER IF NOT EXISTS embeddings_ad AFTER DELETE ON embeddings BEGIN
+      CREATE TRIGGER IF NOT EXISTS embeddings_ad AFTER DELETE ON embeddings WHEN old.prefixed_text IS NOT NULL BEGIN
         INSERT INTO embeddings_fts(embeddings_fts, rowid, prefixed_text) VALUES ('delete', old.rowid, old.prefixed_text);
       END
     `).run();
     this.db.prepare(`
       CREATE TRIGGER IF NOT EXISTS embeddings_au AFTER UPDATE ON embeddings BEGIN
-        INSERT INTO embeddings_fts(embeddings_fts, rowid, prefixed_text) VALUES ('delete', old.rowid, old.prefixed_text);
-        INSERT INTO embeddings_fts(rowid, prefixed_text) VALUES (new.rowid, new.prefixed_text);
+        INSERT INTO embeddings_fts(embeddings_fts, rowid, prefixed_text)
+          SELECT 'delete', old.rowid, old.prefixed_text WHERE old.prefixed_text IS NOT NULL;
+        INSERT INTO embeddings_fts(rowid, prefixed_text)
+          SELECT new.rowid, new.prefixed_text WHERE new.prefixed_text IS NOT NULL;
       END
     `).run();
+
+    // Backfill FTS5 for any rows that have prefixed_text but aren't in FTS5 yet
+    const ftsCount = (this.db.prepare("SELECT count(*) as n FROM embeddings_fts").get() as { n: number }).n;
+    const embeddingsWithPrefix = (this.db.prepare("SELECT count(*) as n FROM embeddings WHERE prefixed_text IS NOT NULL").get() as { n: number }).n;
+    if (ftsCount === 0 && embeddingsWithPrefix > 0) {
+      this.db.prepare("INSERT INTO embeddings_fts(rowid, prefixed_text) SELECT rowid, prefixed_text FROM embeddings WHERE prefixed_text IS NOT NULL").run();
+    }
   }
 
   insert(chunk: ChunkInsert): string {
@@ -148,15 +157,14 @@ export class VectorStore {
     const vMax = vVals.reduce((a, b) => Math.max(a, b), -Infinity);
     const vRange = vMax - vMin || 1;
     const bVals = [...bm25Scores.values()];
-    const bMin = bVals.length ? bVals.reduce((a, b) => Math.min(a, b), Infinity) : 0;
     const bMax = bVals.length ? bVals.reduce((a, b) => Math.max(a, b), -Infinity) : 1;
-    const bRange = bMax - bMin || 1;
+    const bRange = bMax > 0 ? bMax : 1;  // normalize against max only; unmatched → 0
 
     return [...rowidToChunk.entries()]
       .map(([rowid, chunk]) => {
         const normV = ((vectorScores.get(rowid) ?? 0) - vMin) / vRange;
-        const rawB = bm25Scores.get(rowid) ?? bMin;
-        const normB = bm25Scores.size ? (rawB - bMin) / bRange : 0;
+        const rawB = bm25Scores.get(rowid) ?? 0;
+        const normB = bm25Scores.size ? rawB / bRange : 0;
         const score = 0.7 * normV + 0.3 * normB;
         return { ...chunk, score };
       })
