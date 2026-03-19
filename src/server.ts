@@ -64,7 +64,7 @@ export function createServer(config: SecondBrainConfig) {
     sessionDestination,
     heartSummaryPath,
   );
-  const system = buildSystemTools(store, indexer, adapter);
+  const system = buildSystemTools(store, indexer, adapter, embedder);
 
   function makeMcpServer() {
     const server = new McpServer({ name: "nullsafe-second-brain", version: "0.1.0" });
@@ -128,8 +128,8 @@ export function createServer(config: SecondBrainConfig) {
       (args) => system.sb_index_rebuild(args).then(ok));
 
     server.tool("sb_read",
-      "Read the raw content of a vault file by path — use to retrieve and display a specific note or document from the Obsidian vault. Returns the full markdown text.",
-      { path: z.string() },
+      "Read a vault file by path. Without query: returns full markdown text. With query: returns top 3 most relevant excerpts ranked by semantic similarity — use when a file is long and you only need the parts most relevant to a specific question.",
+      { path: z.string(), query: z.string().max(10_000).optional() },
       (args) => system.sb_read(args).then(ok));
 
     server.tool("sb_list",
