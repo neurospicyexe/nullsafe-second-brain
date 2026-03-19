@@ -1,8 +1,16 @@
 import type { VectorStore } from "../store/vector-store.js";
 import type { Indexer } from "../indexer.js";
 import type { VaultAdapter } from "../adapters/vault-adapter.js";
+import type { Embedder } from "../embeddings/embedder.js";
 
-export function buildSystemTools(store: VectorStore, indexer: Indexer, adapter: VaultAdapter) {
+function cosineSimilarity(a: number[], b: number[]): number {
+  const dot = a.reduce((sum, ai, i) => sum + ai * b[i], 0);
+  const magA = Math.sqrt(a.reduce((sum, ai) => sum + ai * ai, 0));
+  const magB = Math.sqrt(b.reduce((sum, bi) => sum + bi * bi, 0));
+  return magA && magB ? dot / (magA * magB) : 0;
+}
+
+export function buildSystemTools(store: VectorStore, indexer: Indexer, adapter: VaultAdapter, embedder: Embedder) {
   return {
     async sb_status() {
       const chunks = store.getAll();
@@ -21,7 +29,23 @@ export function buildSystemTools(store: VectorStore, indexer: Indexer, adapter: 
       return { rebuilt: args.paths.length };
     },
 
-    async sb_read(args: { path: string }) {
+    async sb_read(args: { path: string; query?: string }) {
+      if (args.query) {
+        const chunks = store.filterByPath(args.path);
+        if (chunks.length > 0) {
+          const queryEmbedding = await embedder.embed(args.query);
+          const ranked = chunks
+            .map(chunk => ({
+              section: chunk.section ?? "",
+              text: chunk.chunk_text,
+              score: cosineSimilarity(queryEmbedding, chunk.embedding),
+            }))
+            .sort((a, b) => b.score - a.score)
+            .slice(0, 3)
+            .map(({ section, text }) => ({ section, text }));
+          return { path: args.path, mode: "excerpts" as const, excerpts: ranked };
+        }
+      }
       const content = await adapter.read(args.path);
       return { path: args.path, content };
     },
