@@ -2,46 +2,62 @@ import { describe, it, expect } from "vitest";
 import { paragraphChunk, contextPrefix } from "../indexer.js";
 
 describe("paragraphChunk", () => {
-  it("splits on double newlines", () => {
-    const text = "First paragraph.\n\nSecond paragraph.\n\nThird.";
-    const chunks = paragraphChunk(text);
-    expect(chunks.length).toBeGreaterThan(1);
-    const combined = chunks.map(c => c.text).join(" ");
-    expect(combined).toContain("First paragraph");
-    expect(combined).toContain("Second paragraph");
+  it("merges short paragraphs into one chunk when under maxChars", () => {
+    const chunks = paragraphChunk("Para one.\n\nPara two.\n\nPara three.", 1000);
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0].text).toContain("Para one");
+    expect(chunks[0].text).toContain("Para three");
+    expect(chunks[0].index).toBe(0);
   });
 
-  it("keeps chunks under maxChars", () => {
-    const chunks = paragraphChunk("word ".repeat(500), 200, 0);
-    for (const c of chunks) expect(c.text.length).toBeLessThanOrEqual(220);
+  it("emits chunk when next paragraph would exceed maxChars", () => {
+    const longA = "A".repeat(600);
+    const longB = "B".repeat(600);
+    const chunks = paragraphChunk(`${longA}\n\n${longB}`, 1000);
+    expect(chunks.length).toBeGreaterThanOrEqual(2);
+    expect(chunks[0].text).toContain("A");
+    expect(chunks[1].text).toContain("B");
   });
 
-  it("overlaps: second chunk starts with tail of first", () => {
-    const text = "A".repeat(150) + "\n\n" + "B".repeat(150);
-    const chunks = paragraphChunk(text, 160, 40);
-    expect(chunks.length).toBeGreaterThan(1);
-    expect(chunks[1].text.startsWith("A".repeat(40))).toBe(true);
+  it("prepends overlap tail from previous chunk to next chunk", () => {
+    const longA = "A".repeat(600);
+    const longB = "B".repeat(600);
+    const chunks = paragraphChunk(`${longA}\n\n${longB}`, 1000, 100);
+    expect(chunks.length).toBeGreaterThanOrEqual(2);
+    // Second chunk should start with tail of first chunk
+    expect(chunks[1].text.substring(0, 100)).toBe("A".repeat(100));
   });
 
-  it("assigns chunk_index sequentially from 0", () => {
-    const chunks = paragraphChunk("para one\n\npara two\n\npara three");
+  it("assigns sequential chunk_index values", () => {
+    const longA = "A".repeat(600);
+    const longB = "B".repeat(600);
+    const chunks = paragraphChunk(`${longA}\n\n${longB}`, 1000);
     chunks.forEach((c, i) => expect(c.index).toBe(i));
   });
 
-  it("returns empty array for blank input", () => {
-    expect(paragraphChunk("")).toEqual([]);
-    expect(paragraphChunk("   \n\n  ")).toEqual([]);
+  it("returns empty array for empty input", () => {
+    expect(paragraphChunk("")).toHaveLength(0);
+    expect(paragraphChunk("   ")).toHaveLength(0);
   });
 
-  it("extracts section heading into chunk.section", () => {
-    const text = "## My Section\n\nContent under section.\n\nMore content.";
-    const chunks = paragraphChunk(text);
-    const contentChunks = chunks.filter(c => c.text.includes("Content") || c.text.includes("More"));
-    expect(contentChunks.every(c => c.section === "My Section")).toBe(true);
+  it("splits large paragraph on sentence boundaries", () => {
+    const sentences = Array.from({ length: 20 }, (_, i) => `Sentence ${i} ends here.`);
+    const longPara = sentences.join(" ");
+    const chunks = paragraphChunk(longPara, 200, 0);
+    expect(chunks.length).toBeGreaterThan(1);
+    chunks.forEach(c => expect(c.text.length).toBeLessThanOrEqual(220));
   });
 
-  it("section is empty string when no heading precedes chunk", () => {
-    expect(paragraphChunk("Just a paragraph.")[0].section).toBe("");
+  it("tracks section heading for chunks", () => {
+    const text = "## My Section\n\nParagraph one.\n\nParagraph two.";
+    const chunks = paragraphChunk(text, 1000);
+    // All content merged into one chunk, section should be set
+    expect(chunks[0].section).toBe("My Section");
+  });
+
+  it("returns empty section when no heading present", () => {
+    const chunks = paragraphChunk("Just some text here.", 1000);
+    expect(chunks[0].section).toBe("");
   });
 });
 

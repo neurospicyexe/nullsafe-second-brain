@@ -22,51 +22,60 @@ export function paragraphChunk(text: string, maxChars = 1000, overlap = 200): Ch
   if (text.trim().length === 0) return [];
   const results: ChunkOutput[] = [];
   const paragraphs = text.split(/\n\n+/);
+  let window = "";
+  let windowSection = "";
   let currentSection = "";
   let chunkIndex = 0;
   let overlapTail = "";
 
-  const emitChunk = (body: string, section: string) => {
-    const full = overlapTail ? overlapTail + "\n\n" + body : body;
-    const trimmed = full.trim();
+  const emit = () => {
+    const trimmed = window.trim();
     if (!trimmed) return;
-    results.push({ text: trimmed, section, index: chunkIndex++ });
+    results.push({ text: trimmed, section: windowSection, index: chunkIndex++ });
     overlapTail = overlap > 0 ? trimmed.slice(-overlap) : "";
+    window = overlapTail;
+    windowSection = currentSection;
   };
 
   for (const para of paragraphs) {
     const trimmed = para.trim();
     if (!trimmed) continue;
 
-    const headingMatch = trimmed.match(/^#{1,3}\s+(.+)/);
+    // Update section heading tracker
+    const headingMatch = trimmed.match(/^#{1,2}\s+(.+)/);
     if (headingMatch) {
       currentSection = headingMatch[1].trim();
-      // headings don't emit a chunk themselves; they just update section
-      continue;
+      // Headings are short -- include them in the window so section context appears in chunks
     }
 
     if (trimmed.length > maxChars) {
-      // Hard-slice fallback: split on sentence boundaries, then by char
+      // Paragraph too large -- must split on sentence boundaries
+      // First emit current window if non-empty
+      if (window.trim()) emit();
+
       const sentences = trimmed.split(/(?<=\. )/);
-      let acc = "";
       for (const sentence of sentences) {
-        if (sentence.length > maxChars) {
-          // No sentence boundaries -- hard slice
-          if (acc) { emitChunk(acc, currentSection); acc = ""; }
-          for (let i = 0; i < sentence.length; i += maxChars) {
-            emitChunk(sentence.slice(i, i + maxChars), currentSection);
-          }
-        } else if (acc && acc.length + sentence.length + 1 > maxChars) {
-          emitChunk(acc, currentSection);
-          acc = sentence;
-        } else {
-          acc += (acc ? " " : "") + sentence;
-        }
+        const s = sentence.trim();
+        if (!s) continue;
+        if (window && window.length + s.length + 1 > maxChars) emit();
+        window = window ? window + " " + s : s;
+        if (!windowSection) windowSection = currentSection;
       }
-      if (acc) emitChunk(acc, currentSection);
     } else {
-      emitChunk(trimmed, currentSection);
+      // Check if adding this paragraph would exceed maxChars
+      const wouldBe = window ? window.length + 2 + trimmed.length : trimmed.length;
+      if (window && wouldBe > maxChars) {
+        emit();
+      }
+      // Accumulate into window
+      window = window ? window + "\n\n" + trimmed : trimmed;
+      if (!windowSection) windowSection = currentSection;
     }
+  }
+
+  // Emit any remaining window
+  if (window.trim()) {
+    results.push({ text: window.trim(), section: windowSection, index: chunkIndex++ });
   }
 
   return results;
