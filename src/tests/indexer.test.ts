@@ -59,6 +59,13 @@ describe("paragraphChunk", () => {
     const chunks = paragraphChunk("Just some text here.", 1000);
     expect(chunks[0].section).toBe("");
   });
+
+  it("handles single sentence longer than maxChars without hanging", () => {
+    const longSentence = "X".repeat(2000);
+    const chunks = paragraphChunk(longSentence, 200);
+    expect(chunks.length).toBeGreaterThan(0);
+    chunks.forEach(c => expect(c.text.length).toBeLessThanOrEqual(220));
+  });
 });
 
 describe("contextPrefix", () => {

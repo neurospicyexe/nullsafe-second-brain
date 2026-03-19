@@ -57,9 +57,26 @@ export function paragraphChunk(text: string, maxChars = 1000, overlap = 200): Ch
       for (const sentence of sentences) {
         const s = sentence.trim();
         if (!s) continue;
-        if (window && window.length + s.length + 1 > maxChars) emit();
-        window = window ? window + " " + s : s;
-        if (!windowSection) windowSection = currentSection;
+        if (window) {
+          if (window.length + s.length + 1 > maxChars) emit();
+          window = window + " " + s;
+        } else if (s.length > maxChars) {
+          // Single sentence exceeds maxChars -- hard-slice at maxChars
+          // Cap slice overlap to half of maxChars so the remaining string always shrinks
+          const sliceOverlap = Math.min(overlap, Math.floor(maxChars / 2));
+          let remaining = s;
+          while (remaining.length > maxChars) {
+            results.push({ text: remaining.slice(0, maxChars), section: windowSection || currentSection, index: chunkIndex++ });
+            overlapTail = remaining.slice(maxChars - sliceOverlap, maxChars);
+            remaining = overlapTail + remaining.slice(maxChars);
+            windowSection = currentSection;
+          }
+          window = remaining;
+          if (!windowSection) windowSection = currentSection;
+        } else {
+          window = s;
+          if (!windowSection) windowSection = currentSection;
+        }
       }
     } else {
       // Check if adding this paragraph would exceed maxChars
