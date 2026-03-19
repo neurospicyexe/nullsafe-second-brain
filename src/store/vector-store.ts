@@ -113,7 +113,7 @@ export class VectorStore {
   }
 
   filterByPath(vaultPath: string): ChunkRow[] {
-    return (this.db.prepare("SELECT * FROM embeddings WHERE vault_path = ?").all(vaultPath) as Record<string, unknown>[])
+    return (this.db.prepare("SELECT * FROM embeddings WHERE vault_path = ? ORDER BY chunk_index ASC NULLS LAST").all(vaultPath) as Record<string, unknown>[])
       .map(r => this.deserialize(r));
   }
 
@@ -144,10 +144,12 @@ export class VectorStore {
     }
 
     const vVals = [...vectorScores.values()];
-    const vMin = Math.min(...vVals), vMax = Math.max(...vVals), vRange = vMax - vMin || 1;
+    const vMin = vVals.reduce((a, b) => Math.min(a, b), Infinity);
+    const vMax = vVals.reduce((a, b) => Math.max(a, b), -Infinity);
+    const vRange = vMax - vMin || 1;
     const bVals = [...bm25Scores.values()];
-    const bMin = bVals.length ? Math.min(...bVals) : 0;
-    const bMax = bVals.length ? Math.max(...bVals) : 1;
+    const bMin = bVals.length ? bVals.reduce((a, b) => Math.min(a, b), Infinity) : 0;
+    const bMax = bVals.length ? bVals.reduce((a, b) => Math.max(a, b), -Infinity) : 1;
     const bRange = bMax - bMin || 1;
 
     return [...rowidToChunk.entries()]
