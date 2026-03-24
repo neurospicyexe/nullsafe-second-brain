@@ -25,6 +25,8 @@ export interface ChunkRow {
   embedding: number[];
   tags: string[];
   created_at: string;
+  novelty_score: number;
+  last_surfaced_at: string | null;
 }
 
 export class VectorStore {
@@ -53,9 +55,12 @@ export class VectorStore {
 
     // Additive migration: add columns only if absent. Note: chunk_text already exists -- do NOT add it.
     const cols = (this.db.prepare("PRAGMA table_info(embeddings)").all() as { name: string }[]).map(c => c.name);
-    if (!cols.includes("prefixed_text")) this.db.prepare("ALTER TABLE embeddings ADD COLUMN prefixed_text TEXT").run();
-    if (!cols.includes("section"))       this.db.prepare("ALTER TABLE embeddings ADD COLUMN section TEXT").run();
-    if (!cols.includes("chunk_index"))   this.db.prepare("ALTER TABLE embeddings ADD COLUMN chunk_index INTEGER").run();
+    if (!cols.includes("prefixed_text"))   this.db.prepare("ALTER TABLE embeddings ADD COLUMN prefixed_text TEXT").run();
+    if (!cols.includes("section"))         this.db.prepare("ALTER TABLE embeddings ADD COLUMN section TEXT").run();
+    if (!cols.includes("chunk_index"))     this.db.prepare("ALTER TABLE embeddings ADD COLUMN chunk_index INTEGER").run();
+    if (!cols.includes("novelty_score"))   this.db.prepare("ALTER TABLE embeddings ADD COLUMN novelty_score REAL NOT NULL DEFAULT 1.0").run();
+    if (!cols.includes("last_surfaced_at")) this.db.prepare("ALTER TABLE embeddings ADD COLUMN last_surfaced_at TEXT").run();
+    this.db.prepare("CREATE INDEX IF NOT EXISTS idx_novelty ON embeddings(novelty_score DESC)").run();
 
     // FTS5 virtual table (content-based, backed by embeddings table)
     this.db.prepare(`
@@ -172,6 +177,52 @@ export class VectorStore {
       .slice(0, limit);
   }
 
+  // ── Priority 5: Three-pool surfacing ──────────────────────────────────────────
+
+  // Decay novelty_score by 0.1 for each surfaced chunk, floored by content_type weight.
+  // document = heavy (0.3), note/observation/study = medium (0.2), else = light (0.1).
+  updateNoveltyScores(chunks: Array<{ id: string; content_type: string }>): void {
+    const stmt = this.db.prepare(
+      "UPDATE embeddings SET novelty_score = MAX(?, novelty_score - 0.1), last_surfaced_at = CURRENT_TIMESTAMP WHERE id = ?"
+    );
+    this.db.transaction(() => {
+      for (const { id, content_type } of chunks) {
+        stmt.run(this.noveltyFloor(content_type), id);
+      }
+    })();
+  }
+
+  // Pool 2 -- high novelty: things that haven't surfaced recently.
+  noveltySearch(limit: number, excludeIds: string[]): Array<ChunkRow & { score: number }> {
+    const rows: Record<string, unknown>[] = excludeIds.length > 0
+      ? this.db.prepare(
+          `SELECT * FROM embeddings WHERE id NOT IN (${excludeIds.map(() => "?").join(",")}) ORDER BY novelty_score DESC LIMIT ?`
+        ).all(...excludeIds, limit) as Record<string, unknown>[]
+      : this.db.prepare("SELECT * FROM embeddings ORDER BY novelty_score DESC LIMIT ?").all(limit) as Record<string, unknown>[];
+    return rows.map(r => {
+      const chunk = this.deserialize(r);
+      return { ...chunk, score: chunk.novelty_score };
+    });
+  }
+
+  // Pool 3 -- edge/serendipity: medium cosine similarity (0.3-0.6), sorted by novelty.
+  edgeSearch(queryEmbedding: number[], limit: number, excludeIds: string[]): Array<ChunkRow & { score: number }> {
+    const excludeSet = new Set(excludeIds);
+    return (this.db.prepare("SELECT * FROM embeddings").all() as Record<string, unknown>[])
+      .map(r => this.deserialize(r))
+      .filter(r => !excludeSet.has(r.id))
+      .map(chunk => ({ ...chunk, score: this.cosineSimilarity(queryEmbedding, chunk.embedding) }))
+      .filter(r => r.score >= 0.3 && r.score <= 0.6)
+      .sort((a, b) => b.novelty_score - a.novelty_score)
+      .slice(0, limit);
+  }
+
+  private noveltyFloor(contentType: string): number {
+    if (contentType === "document") return 0.3;
+    if (["note", "observation", "study"].includes(contentType)) return 0.2;
+    return 0.1;
+  }
+
   close(): void {
     this.db.close();
   }
@@ -214,6 +265,8 @@ export class VectorStore {
       embedding,
       tags,
       created_at: row.created_at as string,
+      novelty_score: (row.novelty_score as number) ?? 1.0,
+      last_surfaced_at: (row.last_surfaced_at as string | null) ?? null,
     };
   }
 }
