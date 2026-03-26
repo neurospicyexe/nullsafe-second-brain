@@ -1,10 +1,17 @@
 import cron from "node-cron";
 import type { SecondBrainConfig } from "./config.js";
 import type { buildSynthesisTools } from "./tools/synthesis.js";
+import type { VectorStore } from "./store/vector-store.js";
+import type { OpenAIEmbedder } from "./embeddings/openai-embedder.js";
 
 type SynthesisTools = ReturnType<typeof buildSynthesisTools>;
 
-export function setupTriggers(config: SecondBrainConfig, synthesis: SynthesisTools): void {
+export async function setupTriggers(
+  config: SecondBrainConfig,
+  synthesis: SynthesisTools,
+  store: VectorStore,
+  embedder: OpenAIEmbedder,
+): Promise<void> {
   if (config.triggers.scheduled.enabled) {
     cron.schedule(config.triggers.scheduled.cron, async () => {
       console.error("[second-brain] Running scheduled synthesis...");
@@ -26,5 +33,14 @@ export function setupTriggers(config: SecondBrainConfig, synthesis: SynthesisToo
 
   if (config.triggers.event_driven.enabled) {
     console.error("[second-brain] Event-driven triggers configured (webhook support pending halseth v2).");
+  }
+
+  try {
+    const { loadIngestionConfig } = await import('./ingestion/config.js')
+    const { startIngestionScheduler } = await import('./ingestion/scheduler.js')
+    const ingestionConfig = loadIngestionConfig()
+    startIngestionScheduler(ingestionConfig, store, embedder)
+  } catch (err) {
+    console.warn('[ingestion] scheduler not started:', err instanceof Error ? err.message : err)
   }
 }

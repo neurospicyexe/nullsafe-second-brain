@@ -29,15 +29,17 @@ if (!config.http) {
 
 let makeMcpServer: ReturnType<typeof createServer>["makeMcpServer"];
 let synthesis: ReturnType<typeof createServer>["synthesis"];
+let store: ReturnType<typeof createServer>["store"];
+let embedder: ReturnType<typeof createServer>["embedder"];
 try {
-  ({ makeMcpServer, synthesis } = createServer(config));
+  ({ makeMcpServer, synthesis, store, embedder } = createServer(config));
 } catch (err) {
   console.error("[startup] Failed to create server:", err);
   process.exit(1);
 }
 
 try {
-  setupTriggers(config, synthesis);
+  await setupTriggers(config, synthesis, store, embedder);
 } catch (err) {
   console.error("[startup] Failed to set up triggers (non-fatal):", err);
 }
@@ -45,12 +47,12 @@ try {
 const { port, api_key } = config.http;
 
 // Log what we initialized — no secrets, just shape
-console.error("[startup] Configuration loaded:");
-console.error(`  adapter  : ${config.couchdb ? "couchdb" : "filesystem"}`);
-console.error(`  companions: ${config.companions.map(c => c.id).join(", ")}`);
-console.error(`  embeddings: ${config.embeddings.provider} / ${config.embeddings.model} / key=${config.embeddings.api_key ? "set" : "MISSING"}`);
-console.error(`  halseth  : ${config.halseth.url} / secret=${config.halseth.secret ? "set" : "MISSING"}`);
-console.error(`  port     : ${port}`);
+console.log("[startup] Configuration loaded:");
+console.log(`  adapter  : ${config.couchdb ? "couchdb" : "filesystem"}`);
+console.log(`  companions: ${config.companions.map(c => c.id).join(", ")}`);
+console.log(`  embeddings: ${config.embeddings.provider} / ${config.embeddings.model} / key=${config.embeddings.api_key ? "set" : "MISSING"}`);
+console.log(`  halseth  : ${config.halseth.url} / secret=${config.halseth.secret ? "set" : "MISSING"}`);
+console.log(`  port     : ${port}`);
 
 const issuerUrl = new URL("https://mcp.softcrashentity.com");
 const resourceServerUrl = new URL("https://mcp.softcrashentity.com/mcp");
@@ -200,10 +202,24 @@ httpServer.on("clientError", (err, socket) => {
 });
 
 httpServer.listen(port, "127.0.0.1", () => {
-  console.error(`[startup] second-brain listening on 127.0.0.1:${port}`);
+  console.log(`[startup] second-brain listening on 127.0.0.1:${port}`);
 });
 
 // ── Process-level safety nets ─────────────────────────────────────────────────
+
+// Graceful shutdown: close the SQLite connection cleanly so in-flight WAL writes
+// are flushed before systemd sends SIGKILL after TimeoutStopSec.
+const shutdown = (signal: string) => {
+  console.log(`[process] ${signal} received — shutting down`);
+  httpServer.close(() => {
+    try { store.close(); } catch {}
+    process.exit(0);
+  });
+  // Force exit if httpServer.close() hangs (e.g., long-lived SSE connections)
+  setTimeout(() => { try { store.close(); } catch {} process.exit(0); }, 10_000).unref();
+};
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT",  () => shutdown("SIGINT"));
 
 process.on("uncaughtException", (err) => {
   console.error("[process] Uncaught exception:", err);
