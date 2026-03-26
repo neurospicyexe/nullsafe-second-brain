@@ -33,6 +33,8 @@ export class HalsethClient {
   // Fetch relational deltas from the last N days.
   // GET /deltas does not accept a ?days= param — fetches a large batch
   // and filters client-side by created_at.
+  // NOTE: hard limit of 200. Deltas beyond that are silently excluded.
+  // If a high-volume week exceeds this, increase the limit here.
   async getRecentDeltas(days = 7): Promise<Record<string, unknown>[]> {
     const all = await this.get<Record<string, unknown>[]>(`/deltas?limit=200`);
     const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
@@ -44,6 +46,7 @@ export class HalsethClient {
 
   // Fetch a handover by session_id.
   // GET /handovers returns a list; we find the matching one client-side.
+  // NOTE: hard limit of 100. Returns null if the handover is older than the 100 most recent.
   async getHandover(sessionId: string): Promise<Record<string, unknown> | null> {
     const all = await this.get<Record<string, unknown>[]>(`/handovers?limit=100`);
     return all.find(h => h.session_id === sessionId) ?? null;
