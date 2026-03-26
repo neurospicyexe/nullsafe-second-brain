@@ -5,6 +5,8 @@ export type SourceType =
   | 'companion_journal'
   | 'inter_companion_note'
   | 'handoff'
+  | 'historical_corpus'
+  | 'claude_export'
 
 export interface IngestRecord {
   id: number
