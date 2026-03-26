@@ -77,8 +77,13 @@ async function chunkSegment(
   const data = await response.json() as { choices: Array<{ message: { content: string } }> }
   const raw = data.choices[0]?.message?.content ?? ''
 
-  // Parse JSON -- DeepSeek may wrap in markdown code block
-  const jsonStr = raw.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim()
+  // Extract JSON array -- model may wrap in markdown or add preamble text
+  const start = raw.indexOf('[')
+  const end = raw.lastIndexOf(']')
+  if (start === -1 || end === -1 || end < start) {
+    throw new Error(`DeepSeek chunk response missing JSON array: ${raw.slice(0, 200)}`)
+  }
+  const jsonStr = raw.slice(start, end + 1)
 
   try {
     return JSON.parse(jsonStr) as SemanticChunk[]
