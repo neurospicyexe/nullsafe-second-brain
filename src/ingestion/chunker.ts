@@ -65,7 +65,7 @@ async function chunkSegment(
     body: JSON.stringify({
       model: config.deepseekModel,
       messages: [{ role: 'user', content: prompt }],
-      max_tokens: 4000,
+      max_tokens: 8000,
       temperature: 0.2,
     }),
   })
@@ -80,14 +80,14 @@ async function chunkSegment(
   // Extract JSON array -- model may wrap in markdown or add preamble text
   const start = raw.indexOf('[')
   const end = raw.lastIndexOf(']')
-  if (start === -1 || end === -1 || end < start) {
-    throw new Error(`DeepSeek chunk response missing JSON array: ${raw.slice(0, 200)}`)
+  if (start !== -1 && end !== -1 && end > start) {
+    try {
+      return JSON.parse(raw.slice(start, end + 1)) as SemanticChunk[]
+    } catch {
+      // fall through to single-chunk fallback
+    }
   }
-  const jsonStr = raw.slice(start, end + 1)
 
-  try {
-    return JSON.parse(jsonStr) as SemanticChunk[]
-  } catch {
-    throw new Error(`Failed to parse DeepSeek chunk response: ${jsonStr.slice(0, 200)}`)
-  }
+  // Fallback: treat entire segment as one chunk (handles truncated/unparseable responses)
+  return [{ label: 'full-segment', content }]
 }
