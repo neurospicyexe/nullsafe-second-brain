@@ -145,5 +145,5 @@ export function createServer(config: SecondBrainConfig) {
     return server;
   }
 
-  return { makeMcpServer, synthesis, adapter, store };
+  return { makeMcpServer, synthesis, adapter, store, embedder };
 }

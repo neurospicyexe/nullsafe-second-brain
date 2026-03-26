@@ -4,7 +4,7 @@ import { createServer } from "./server.js";
 import { setupTriggers } from "./triggers.js";
 
 const config = loadConfig();
-const { makeMcpServer, synthesis } = createServer(config);
-setupTriggers(config, synthesis);
+const { makeMcpServer, synthesis, store, embedder } = createServer(config);
+await setupTriggers(config, synthesis, store, embedder);
 const transport = new StdioServerTransport();
 await makeMcpServer().connect(transport);
