@@ -56,9 +56,12 @@ export function buildRetrievalTools(store: VectorStore, embedder: Embedder) {
     },
 
     async sb_recall(args: { companion: string | null; content_type?: string; limit?: number }) {
-      const chunks = store.filterByCompanion(args.companion);
-      const filtered = args.content_type ? chunks.filter(c => c.content_type === args.content_type) : chunks;
-      return { chunks: filtered.slice(0, args.limit ?? 20) };
+      const chunks = store.queryFiltered({
+        companion: args.companion,
+        contentType: args.content_type,
+        limit: args.limit ?? 20,
+      });
+      return { chunks };
     },
 
     async sb_recent_patterns(args: { vaultAdapter: VaultAdapter; summaryPath: string }) {

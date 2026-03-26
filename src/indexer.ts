@@ -129,14 +129,15 @@ export class Indexer {
   }
 
   async reindex(vaultPath: string): Promise<void> {
-    // Look up existing metadata before deleting
-    const existing = this.store.getAll().find(c => c.vault_path === vaultPath);
+    // Use the indexed filterByPath query rather than getAll().find() to avoid
+    // loading and deserializing every row in the store just to get metadata for one path.
+    const existing = this.store.filterByPath(vaultPath)[0];
     const companion = existing?.companion ?? null;
     const content_type = (existing?.content_type ?? "note") as ContentType;
     const tags = existing?.tags ?? [];
 
     const content = await this.adapter.read(vaultPath);
-    this.store.deleteByPath(vaultPath);
+    // deleteByPath is called again inside indexContent — no need to call it here too.
     await this.indexContent(vaultPath, content, companion, content_type, tags);
   }
 

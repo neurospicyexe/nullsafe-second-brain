@@ -39,6 +39,10 @@ export function buildSynthesisTools(
       return { path };
     },
 
+    // TODO(sb_run_patterns): Currently writes only counts (sessions.length, deltas.length) —
+    // no actual synthesis of content. Revisit after Halseth synthesis worker changes settle
+    // so the output format can align with what the synthesis layer already produces.
+    // The infra (fetch → write → index) is correct; only the content generation needs work.
     async sb_run_patterns(args: { summary?: boolean } = {}) {
       const [sessions, deltas] = await Promise.all([
         halseth.getRecentSessions(7),
