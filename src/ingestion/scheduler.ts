@@ -3,6 +3,7 @@ import type { IngestionConfig } from './types.js'
 import type { VectorStore } from '../store/vector-store.js'
 import type { OpenAIEmbedder } from '../embeddings/openai-embedder.js'
 import { createPipeline } from './pipeline.js'
+import { runGapDetector } from './gap-detector.js'
 
 export function startIngestionScheduler(
   config: IngestionConfig,
@@ -20,6 +21,15 @@ export function startIngestionScheduler(
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       console.error(`[ingestion] pipeline error: ${msg}`)
+    }
+
+    // Gap detector: fill companion notes for relational sessions that were missed.
+    // Runs after pipeline regardless of pipeline success/failure.
+    try {
+      await runGapDetector(config)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      console.error(`[ingestion] gap-detector error: ${msg}`)
     }
   })
 }
