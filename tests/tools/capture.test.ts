@@ -44,9 +44,9 @@ describe("capture tools", () => {
     expect(result.path).toContain("Docs/");
   });
 
-  it("sb_save_note returns the written path", async () => {
+  it("sb_save_document returns the written path", async () => {
     const { tools } = makeTools();
-    const result = await tools.sb_save_note({ content: "# Note", tags: [] });
+    const result = await tools.sb_save_document({ content: "# Note", tags: [] });
     expect(result.path).toBeTruthy();
   });
 

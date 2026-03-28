@@ -97,14 +97,16 @@ describe('semanticChunk', () => {
     expect(result).toEqual(validChunks)
   })
 
-  it('throws when response JSON is invalid', async () => {
+  it('returns single-chunk fallback when response JSON is invalid', async () => {
     const fetchMock = makeFetchMock({
       choices: [{ message: { content: 'not valid json at all' } }],
     })
     vi.stubGlobal('fetch', fetchMock)
 
-    await expect(semanticChunk('Some text', mockConfig))
-      .rejects.toThrow('Failed to parse DeepSeek chunk response')
+    const result = await semanticChunk('Some text', mockConfig)
+    expect(result).toHaveLength(1)
+    expect(result[0].label).toBe('full-segment')
+    expect(result[0].content).toBe('Some text')
   })
 
   it('throws when response is not ok', async () => {
