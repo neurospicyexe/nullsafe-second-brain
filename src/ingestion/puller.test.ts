@@ -12,6 +12,7 @@ const BASE_CONFIG: IngestionConfig = {
   concurrencyDelayMs: 500,
   embeddingBatchSize: 20,
   hwmPath: '/tmp/hwm.json',
+  evaluatorCronSchedule: '0 */6 * * *',
 }
 
 // ---- buildUrl ----

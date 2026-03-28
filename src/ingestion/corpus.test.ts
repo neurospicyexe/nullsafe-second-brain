@@ -39,6 +39,7 @@ const mockConfig: IngestionConfig = {
   concurrencyDelayMs: 0,
   embeddingBatchSize: 20,
   hwmPath: '/tmp/test-hwm.json',
+  evaluatorCronSchedule: '0 */6 * * *',
 }
 
 function makeMockStore(existsByPathResult = false) {

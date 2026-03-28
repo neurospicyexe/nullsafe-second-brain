@@ -26,5 +26,6 @@ export function loadIngestionConfig(): IngestionConfig {
     concurrencyDelayMs: parseInt(process.env.INGESTION_DELAY_MS ?? '500', 10),
     embeddingBatchSize: parseInt(process.env.EMBEDDING_BATCH_SIZE ?? '20', 10),
     hwmPath,
+    evaluatorCronSchedule: process.env.EVALUATOR_CRON ?? '0 */6 * * *',
   }
 }

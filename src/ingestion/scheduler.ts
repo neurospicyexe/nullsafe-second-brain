@@ -4,6 +4,7 @@ import type { VectorStore } from '../store/vector-store.js'
 import type { OpenAIEmbedder } from '../embeddings/openai-embedder.js'
 import { createPipeline } from './pipeline.js'
 import { runGapDetector } from './gap-detector.js'
+import { runDriftEvaluation } from './evaluator.js'
 
 export function startIngestionScheduler(
   config: IngestionConfig,
@@ -30,6 +31,19 @@ export function startIngestionScheduler(
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       console.error(`[ingestion] gap-detector error: ${msg}`)
+    }
+  })
+
+  // Drift evaluator: runs independently every 6h (configurable via EVALUATOR_CRON).
+  // Compares persona_blocks to basin attractors, writes drift history + pressure flags.
+  console.log(`[ingestion] evaluator cron: ${config.evaluatorCronSchedule}`)
+  cron.schedule(config.evaluatorCronSchedule, async () => {
+    console.log('[ingestion] evaluator tick: running drift evaluation')
+    try {
+      await runDriftEvaluation(config, embedder)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      console.error(`[ingestion] evaluator error: ${msg}`)
     }
   })
 }
