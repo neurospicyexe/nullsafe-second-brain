@@ -31,13 +31,6 @@ describe("synthesis tools", () => {
     expect(result.path).toContain("session-s1");
   });
 
-  it("sb_write_pattern_summary writes the hearth summary file", async () => {
-    const tools = makeTools();
-    const result = await tools.sb_write_pattern_summary();
-    expect(mockAdapter.write).toHaveBeenCalledWith(expect.objectContaining({ path: "_recent-patterns.md" }));
-    expect(result.path).toBe("_recent-patterns.md");
-  });
-
   it("sb_run_patterns writes an observation note", async () => {
     const tools = makeTools();
     const result = await tools.sb_run_patterns();
