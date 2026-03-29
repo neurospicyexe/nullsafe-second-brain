@@ -31,8 +31,9 @@ let makeMcpServer: ReturnType<typeof createServer>["makeMcpServer"];
 let synthesis: ReturnType<typeof createServer>["synthesis"];
 let store: ReturnType<typeof createServer>["store"];
 let embedder: ReturnType<typeof createServer>["embedder"];
+let indexer: ReturnType<typeof createServer>["indexer"];
 try {
-  ({ makeMcpServer, synthesis, store, embedder } = createServer(config));
+  ({ makeMcpServer, synthesis, store, embedder, indexer } = createServer(config));
 } catch (err) {
   console.error("[startup] Failed to create server:", err);
   process.exit(1);
@@ -186,6 +187,65 @@ const mcpHandler = async (req: Request, res: Response): Promise<void> => {
 app.post("/mcp", mcpHandler);
 app.get("/mcp", mcpHandler);
 app.delete("/mcp", mcpHandler);
+
+// ── Manual ingest endpoint ────────────────────────────────────────────────────
+
+// Same bearer auth as MCP routes
+app.use("/ingest", requireBearerAuth({ verifier: oauthProvider, resourceMetadataUrl }));
+
+// POST /ingest/text — index raw text into the vector store as course_material.
+// Used by the NotebookLM → Second Brain seeding workflow from Claude Code.
+// Body: { title: string, content: string, companion?: string, tags?: string[], replace?: boolean }
+app.post("/ingest/text", async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { title, content, companion, tags, replace } = req.body ?? {};
+
+    if (typeof title !== "string" || !title.trim()) {
+      res.status(400).json({ error: "title is required" });
+      return;
+    }
+    if (typeof content !== "string" || !content.trim()) {
+      res.status(400).json({ error: "content is required" });
+      return;
+    }
+    if (content.length > 500_000) {
+      res.status(413).json({ error: "content exceeds 500KB limit" });
+      return;
+    }
+
+    const slug = title.trim().toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "")
+      .slice(0, 100);
+    const vaultPath = `notebooklm/${slug}.md`;
+
+    if (!replace && store.existsByPath(vaultPath)) {
+      res.json({ vault_path: vaultPath, chunks_indexed: 0, message: "already indexed — pass replace:true to overwrite" });
+      return;
+    }
+
+    const resolvedCompanion = typeof companion === "string" ? companion.toLowerCase().slice(0, 64) : null;
+    const resolvedTags: string[] = Array.isArray(tags) ? tags.map(String).slice(0, 20) : [];
+
+    await indexer.write({
+      path: vaultPath,
+      content: content.trim(),
+      companion: resolvedCompanion,
+      content_type: "course_material",
+      tags: resolvedTags,
+      overwrite: true,
+    });
+
+    const chunksIndexed = store.filterByPath(vaultPath).length;
+    console.log(`[ingest] indexed ${chunksIndexed} chunks → ${vaultPath}`);
+    res.json({ vault_path: vaultPath, chunks_indexed: chunksIndexed, message: "ok" });
+  } catch (err) {
+    console.error("[ingest] POST /ingest/text error:", err);
+    if (!res.headersSent) {
+      res.status(500).json({ error: "internal error" });
+    }
+  }
+});
 
 // ── HTTP server ───────────────────────────────────────────────────────────────
 

@@ -27,5 +27,6 @@ export function loadIngestionConfig(): IngestionConfig {
     embeddingBatchSize: parseInt(process.env.EMBEDDING_BATCH_SIZE ?? '20', 10),
     hwmPath,
     evaluatorCronSchedule: process.env.EVALUATOR_CRON ?? '0 */6 * * *',
+    sitPromptCronSchedule: process.env.SIT_PROMPT_CRON ?? '0 */12 * * *',
   }
 }

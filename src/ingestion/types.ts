@@ -31,5 +31,6 @@ export interface IngestionConfig {
   concurrencyDelayMs: number   // default: 500
   embeddingBatchSize: number   // default: 20
   hwmPath: string              // path to data/hwm.json
-  evaluatorCronSchedule: string // default: '0 */6 * * *' (every 6h)
+  evaluatorCronSchedule: string  // default: '0 */6 * * *' (every 6h)
+  sitPromptCronSchedule: string  // default: '0 */12 * * *' (twice daily)
 }

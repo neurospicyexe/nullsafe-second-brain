@@ -13,6 +13,7 @@ const BASE_CONFIG: IngestionConfig = {
   embeddingBatchSize: 20,
   hwmPath: '/tmp/hwm.json',
   evaluatorCronSchedule: '0 */6 * * *',
+  sitPromptCronSchedule: '0 */12 * * *',
 }
 
 // ---- buildUrl ----
