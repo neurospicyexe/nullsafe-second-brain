@@ -7,6 +7,11 @@ export type SourceType =
   | 'handoff'
   | 'historical_corpus'
   | 'claude_export'
+  | 'wound'
+  | 'companion_dream'
+  | 'open_loop'
+  | 'relational_state'
+  | 'tension'
 
 export interface IngestRecord {
   id: number

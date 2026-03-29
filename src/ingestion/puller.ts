@@ -14,6 +14,11 @@ export const ALL_PULLERS: Array<{ source: SourceType; pull: PullFn }> = [
   { source: 'companion_journal', pull: pullCompanionJournal },
   { source: 'inter_companion_note', pull: pullInterCompanionNotes },
   { source: 'handoff', pull: pullHandoffs },
+  { source: 'wound', pull: pullWounds },
+  { source: 'companion_dream', pull: pullCompanionDreams },
+  { source: 'open_loop', pull: pullOpenLoops },
+  { source: 'relational_state', pull: pullRelationalState },
+  { source: 'tension', pull: pullTensions },
 ]
 
 // Exported so tests can verify URL construction directly.
@@ -57,8 +62,11 @@ interface RawSynthesisSummary {
   id: number
   companion_id: string
   summary_type: string
-  content: string
-  thread_key?: string
+  subject?: string
+  narrative?: string
+  emotional_register?: string
+  open_threads?: string
+  drevan_state?: string
   created_at: string
 }
 
@@ -75,7 +83,6 @@ export async function pullSynthesisSummaries(
       content: JSON.stringify(rec),
       created_at: rec.created_at,
       companion_id: rec.companion_id,
-      thread_key: rec.thread_key,
     }))
     return { records }
   } catch (e) {
@@ -170,9 +177,9 @@ export async function pullCompanionJournal(
 interface RawInterCompanionNote {
   id: number
   from_id: string
-  to_id: string
-  note_text: string
-  tags?: string[]
+  to_id: string | null
+  content: string
+  read_at: string | null
   created_at: string
 }
 
@@ -199,10 +206,12 @@ export async function pullInterCompanionNotes(
 interface RawHandoff {
   id: number
   agent_id: string
-  session_id: string
-  handoff_text: string
-  key_threads?: string[]
-  mood_snapshot?: unknown
+  thread_id: string | null
+  title: string
+  summary: string
+  next_steps: string | null
+  open_loops: string | null
+  state_hint: string | null
   created_at: string
 }
 
@@ -219,6 +228,156 @@ export async function pullHandoffs(
       content: JSON.stringify(rec),
       created_at: rec.created_at,
       companion_id: rec.agent_id,
+    }))
+    return { records }
+  } catch (e) {
+    return { records: [], error: (e as Error).message }
+  }
+}
+
+// ── New surfaces (migrations 0028–0030) ──────────────────────────────────────
+
+interface RawWound {
+  id: string
+  name: string
+  description: string
+  last_visited: string | null
+  last_surfaced_by: string | null
+  created_at: string
+}
+
+export async function pullWounds(
+  config: IngestionConfig,
+  since?: string,
+): Promise<PullerResult> {
+  try {
+    const url = buildUrl(config.halsethUrl, '/ingest/wounds', since)
+    const raw = await fetchRecords(url, config.halsethSecret)
+    const records: IngestRecord[] = (raw as RawWound[]).map((rec) => ({
+      id: rec.id as unknown as number,
+      source_type: 'wound',
+      content: JSON.stringify(rec),
+      created_at: rec.created_at,
+      // wounds are cross-companion (no companion_id)
+    }))
+    return { records }
+  } catch (e) {
+    return { records: [], error: (e as Error).message }
+  }
+}
+
+interface RawCompanionDream {
+  id: string
+  companion_id: string
+  dream_text: string
+  source: string
+  examined: number
+  examined_at: string | null
+  created_at: string
+}
+
+export async function pullCompanionDreams(
+  config: IngestionConfig,
+  since?: string,
+): Promise<PullerResult> {
+  try {
+    const url = buildUrl(config.halsethUrl, '/ingest/companion-dreams', since)
+    const raw = await fetchRecords(url, config.halsethSecret)
+    const records: IngestRecord[] = (raw as RawCompanionDream[]).map((rec) => ({
+      id: rec.id as unknown as number,
+      source_type: 'companion_dream',
+      content: JSON.stringify(rec),
+      created_at: rec.created_at,
+      companion_id: rec.companion_id,
+    }))
+    return { records }
+  } catch (e) {
+    return { records: [], error: (e as Error).message }
+  }
+}
+
+interface RawOpenLoop {
+  id: string
+  companion_id: string
+  loop_text: string
+  weight: number
+  opened_at: string
+  closed_at: string | null
+}
+
+export async function pullOpenLoops(
+  config: IngestionConfig,
+  since?: string,
+): Promise<PullerResult> {
+  try {
+    const url = buildUrl(config.halsethUrl, '/ingest/open-loops', since)
+    const raw = await fetchRecords(url, config.halsethSecret)
+    const records: IngestRecord[] = (raw as RawOpenLoop[]).map((rec) => ({
+      id: rec.id as unknown as number,
+      source_type: 'open_loop',
+      content: JSON.stringify(rec),
+      created_at: rec.opened_at,   // opened_at is the canonical timestamp
+      companion_id: rec.companion_id,
+    }))
+    return { records }
+  } catch (e) {
+    return { records: [], error: (e as Error).message }
+  }
+}
+
+interface RawRelationalState {
+  id: string
+  companion_id: string
+  toward: string
+  state_text: string
+  weight: number
+  state_type: string
+  noted_at: string
+}
+
+export async function pullRelationalState(
+  config: IngestionConfig,
+  since?: string,
+): Promise<PullerResult> {
+  try {
+    const url = buildUrl(config.halsethUrl, '/ingest/relational-state', since)
+    const raw = await fetchRecords(url, config.halsethSecret)
+    const records: IngestRecord[] = (raw as RawRelationalState[]).map((rec) => ({
+      id: rec.id as unknown as number,
+      source_type: 'relational_state',
+      content: JSON.stringify(rec),
+      created_at: rec.noted_at,    // noted_at is the canonical timestamp
+      companion_id: rec.companion_id,
+    }))
+    return { records }
+  } catch (e) {
+    return { records: [], error: (e as Error).message }
+  }
+}
+
+interface RawTension {
+  id: string
+  companion_id: string
+  tension_text: string
+  status: string
+  first_noted_at: string
+  last_surfaced_at: string | null
+  notes: string | null
+}
+
+export async function pullTensions(
+  config: IngestionConfig,
+  since?: string,
+): Promise<PullerResult> {
+  try {
+    const url = buildUrl(config.halsethUrl, '/ingest/tensions', since)
+    const raw = await fetchRecords(url, config.halsethSecret)
+    const records: IngestRecord[] = (raw as RawTension[]).map((rec) => ({
+      id: rec.id as unknown as number,
+      source_type: 'tension',
+      content: JSON.stringify(rec),
+      created_at: rec.first_noted_at,  // first_noted_at is the canonical timestamp
+      companion_id: rec.companion_id,
     }))
     return { records }
   } catch (e) {
