@@ -5,6 +5,7 @@ import type { OpenAIEmbedder } from '../embeddings/openai-embedder.js'
 import { createPipeline } from './pipeline.js'
 import { runGapDetector } from './gap-detector.js'
 import { runDriftEvaluation } from './evaluator.js'
+import { runSitPrompts } from './sit-prompts.js'
 
 export function startIngestionScheduler(
   config: IngestionConfig,
@@ -44,6 +45,20 @@ export function startIngestionScheduler(
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       console.error(`[ingestion] evaluator error: ${msg}`)
+    }
+  })
+
+  // Sit & Resolve prompts: runs every 12h (configurable via SIT_PROMPT_CRON).
+  // Finds sitting notes older than each companion's sit_resolve_days threshold,
+  // writes a sit_prompt companion_note so the companion sees it at next boot.
+  console.log(`[ingestion] sit-prompts cron: ${config.sitPromptCronSchedule}`)
+  cron.schedule(config.sitPromptCronSchedule, async () => {
+    console.log('[ingestion] sit-prompts tick: checking stale sitting notes')
+    try {
+      await runSitPrompts(config)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      console.error(`[ingestion] sit-prompts error: ${msg}`)
     }
   })
 }

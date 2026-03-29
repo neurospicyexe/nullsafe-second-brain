@@ -1,5 +1,5 @@
 export type VaultAdapterType = "filesystem" | "obsidian-rest";
-export type ContentType = "document" | "note" | "study" | "observation" | "session_summary";
+export type ContentType = "document" | "note" | "study" | "observation" | "session_summary" | "course_material";
 export type CompanionRole = "companion" | "audit" | "seal" | string;
 
 export interface CompanionConfig {
