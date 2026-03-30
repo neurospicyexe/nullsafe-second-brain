@@ -306,62 +306,68 @@ app.post("/ingest/corpus-file", async (req: Request, res: Response): Promise<voi
       }
     }
 
-    const results: Array<{ filename: string; chunks_indexed: number; chunks_skipped: number; error?: string }> = [];
+    // Respond immediately — Cloudflare's 100s proxy timeout kills long DeepSeek calls.
+    // Processing continues in the background; dedup ensures safe re-runs.
+    res.status(202).json({
+      message: "accepted",
+      source_type: sourceType,
+      files: rawFiles.map(f => (f.filename as string).trim()),
+    });
 
-    for (const f of rawFiles) {
-      const filename = (f.filename as string).trim();
-      let chunksIndexed = 0;
-      let chunksSkipped = 0;
+    // Background processing — intentionally not awaited
+    (async () => {
+      for (const f of rawFiles) {
+        const filename = (f.filename as string).trim();
+        let chunksIndexed = 0;
+        let chunksSkipped = 0;
 
-      try {
-        const chunks = await semanticChunk(f.content as string, ingestionConfig);
-        console.log(`[ingest/corpus-file] ${filename}: ${chunks.length} chunks`);
+        try {
+          const chunks = await semanticChunk(f.content as string, ingestionConfig!);
+          console.log(`[ingest/corpus-file] ${filename}: ${chunks.length} chunks`);
 
-        await withConcurrencyLimit(
-          chunks.map((chunk, i) => ({ chunk, i })),
-          ingestionConfig.concurrencyLimit,
-          ingestionConfig.concurrencyDelayMs,
-          async ({ chunk, i }) => {
-            const vaultPath = `rag/${sourceType}/${filename}/${i}`;
+          await withConcurrencyLimit(
+            chunks.map((chunk, i) => ({ chunk, i })),
+            ingestionConfig!.concurrencyLimit,
+            ingestionConfig!.concurrencyDelayMs,
+            async ({ chunk, i }) => {
+              const vaultPath = `rag/${sourceType}/${filename}/${i}`;
 
-            if (store.existsByPath(vaultPath)) {
-              chunksSkipped++;
-              return;
+              if (store.existsByPath(vaultPath)) {
+                chunksSkipped++;
+                return;
+              }
+
+              const record: IngestRecord = {
+                id: i,
+                source_type: sourceType,
+                content: chunk.content,
+                created_at: new Date().toISOString(),
+              };
+
+              const wrapped = await wrapChunk(record, ingestionConfig!);
+              const embedding = await embedder.embed(wrapped);
+
+              store.insert({
+                vault_path: vaultPath,
+                chunk_text: wrapped,
+                embedding,
+                companion: null,
+                content_type: sourceType,
+                tags: [chunk.label],
+              });
+
+              chunksIndexed++;
             }
+          );
+        } catch (err) {
+          console.error(`[ingest/corpus-file] failed: ${filename}`, err);
+          continue;
+        }
 
-            const record: IngestRecord = {
-              id: i,
-              source_type: sourceType,
-              content: chunk.content,
-              created_at: new Date().toISOString(),
-            };
-
-            const wrapped = await wrapChunk(record, ingestionConfig);
-            const embedding = await embedder.embed(wrapped);
-
-            store.insert({
-              vault_path: vaultPath,
-              chunk_text: wrapped,
-              embedding,
-              companion: null,
-              content_type: sourceType,
-              tags: [chunk.label],
-            });
-
-            chunksIndexed++;
-          }
-        );
-      } catch (err) {
-        console.error(`[ingest/corpus-file] failed: ${filename}`, err);
-        results.push({ filename, chunks_indexed: 0, chunks_skipped: 0, error: String(err) });
-        continue;
+        console.log(`[ingest/corpus-file] ${filename}: ${chunksIndexed} indexed, ${chunksSkipped} skipped`);
       }
-
-      console.log(`[ingest/corpus-file] ${filename}: ${chunksIndexed} indexed, ${chunksSkipped} skipped`);
-      results.push({ filename, chunks_indexed: chunksIndexed, chunks_skipped: chunksSkipped });
-    }
-
-    res.json({ source_type: sourceType, results });
+      console.log(`[ingest/corpus-file] batch complete for ${rawFiles.length} files`);
+    })();
   } catch (err) {
     console.error("[ingest/corpus-file] error:", err);
     if (!res.headersSent) res.status(500).json({ error: "internal error" });
