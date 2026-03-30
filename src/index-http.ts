@@ -8,9 +8,14 @@ import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { mcpAuthRouter } from "@modelcontextprotocol/sdk/server/auth/router.js";
 import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
 import { loadConfig } from "./config.js";
+import { loadIngestionConfig } from "./ingestion/config.js";
 import { createServer } from "./server.js";
 import { setupTriggers } from "./triggers.js";
 import { SingleUserOAuthProvider } from "./oauth-provider.js";
+import { semanticChunk } from "./ingestion/chunker.js";
+import { wrapChunk } from "./ingestion/deepseek-wrapper.js";
+import { withConcurrencyLimit } from "./ingestion/corpus.js";
+import type { SourceType, IngestRecord } from "./ingestion/types.js";
 
 // ── Startup ──────────────────────────────────────────────────────────────────
 
@@ -20,6 +25,13 @@ try {
 } catch (err) {
   console.error("[startup] Failed to load config:", err);
   process.exit(1);
+}
+
+let ingestionConfig: ReturnType<typeof loadIngestionConfig> | undefined;
+try {
+  ingestionConfig = loadIngestionConfig();
+} catch (err) {
+  console.error("[startup] Ingestion config unavailable (corpus ingest endpoint disabled):", err);
 }
 
 if (!config.http) {
@@ -244,6 +256,115 @@ app.post("/ingest/text", async (req: Request, res: Response): Promise<void> => {
     if (!res.headersSent) {
       res.status(500).json({ error: "internal error" });
     }
+  }
+});
+
+// POST /ingest/corpus-file — run one or more .md files through the full DeepSeek
+// semantic chunking pipeline and index into the vector store as historical_corpus.
+// Body: { files: Array<{ filename: string, content: string }>, source_type?: SourceType }
+// Single-file shorthand: { filename: string, content: string, source_type?: SourceType }
+app.post("/ingest/corpus-file", async (req: Request, res: Response): Promise<void> => {
+  if (!ingestionConfig) {
+    res.status(503).json({ error: "ingestion config not available — check DEEPSEEK_API_KEY, HALSETH_URL, HALSETH_SECRET env vars" });
+    return;
+  }
+
+  try {
+    const body = req.body ?? {};
+
+    // Normalise single-file and batch-file shapes into one array
+    const rawFiles: Array<{ filename: unknown; content: unknown }> =
+      Array.isArray(body.files) ? body.files : [{ filename: body.filename, content: body.content }];
+
+    if (rawFiles.length === 0) {
+      res.status(400).json({ error: "no files provided" });
+      return;
+    }
+    if (rawFiles.length > 50) {
+      res.status(400).json({ error: "max 50 files per request" });
+      return;
+    }
+
+    const sourceType: SourceType =
+      typeof body.source_type === "string" && body.source_type.length > 0
+        ? (body.source_type as SourceType)
+        : "historical_corpus";
+
+    // Validate all files up-front before doing any work
+    for (const f of rawFiles) {
+      if (typeof f.filename !== "string" || !f.filename.trim()) {
+        res.status(400).json({ error: "each file must have a non-empty filename" });
+        return;
+      }
+      if (typeof f.content !== "string" || !f.content.trim()) {
+        res.status(400).json({ error: `file "${f.filename}" has empty content` });
+        return;
+      }
+      if (f.content.length > 500_000) {
+        res.status(413).json({ error: `file "${f.filename}" exceeds 500KB limit` });
+        return;
+      }
+    }
+
+    const results: Array<{ filename: string; chunks_indexed: number; chunks_skipped: number; error?: string }> = [];
+
+    for (const f of rawFiles) {
+      const filename = (f.filename as string).trim();
+      let chunksIndexed = 0;
+      let chunksSkipped = 0;
+
+      try {
+        const chunks = await semanticChunk(f.content as string, ingestionConfig);
+        console.log(`[ingest/corpus-file] ${filename}: ${chunks.length} chunks`);
+
+        await withConcurrencyLimit(
+          chunks.map((chunk, i) => ({ chunk, i })),
+          ingestionConfig.concurrencyLimit,
+          ingestionConfig.concurrencyDelayMs,
+          async ({ chunk, i }) => {
+            const vaultPath = `rag/${sourceType}/${filename}/${i}`;
+
+            if (store.existsByPath(vaultPath)) {
+              chunksSkipped++;
+              return;
+            }
+
+            const record: IngestRecord = {
+              id: i,
+              source_type: sourceType,
+              content: chunk.content,
+              created_at: new Date().toISOString(),
+            };
+
+            const wrapped = await wrapChunk(record, ingestionConfig);
+            const embedding = await embedder.embed(wrapped);
+
+            store.insert({
+              vault_path: vaultPath,
+              chunk_text: wrapped,
+              embedding,
+              companion: null,
+              content_type: sourceType,
+              tags: [chunk.label],
+            });
+
+            chunksIndexed++;
+          }
+        );
+      } catch (err) {
+        console.error(`[ingest/corpus-file] failed: ${filename}`, err);
+        results.push({ filename, chunks_indexed: 0, chunks_skipped: 0, error: String(err) });
+        continue;
+      }
+
+      console.log(`[ingest/corpus-file] ${filename}: ${chunksIndexed} indexed, ${chunksSkipped} skipped`);
+      results.push({ filename, chunks_indexed: chunksIndexed, chunks_skipped: chunksSkipped });
+    }
+
+    res.json({ source_type: sourceType, results });
+  } catch (err) {
+    console.error("[ingest/corpus-file] error:", err);
+    if (!res.headersSent) res.status(500).json({ error: "internal error" });
   }
 });
 
