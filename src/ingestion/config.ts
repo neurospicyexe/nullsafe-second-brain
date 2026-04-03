@@ -28,5 +28,6 @@ export function loadIngestionConfig(): IngestionConfig {
     hwmPath,
     evaluatorCronSchedule: process.env.EVALUATOR_CRON ?? '0 */6 * * *',
     sitPromptCronSchedule: process.env.SIT_PROMPT_CRON ?? '0 */12 * * *',
+    patternSynthCronSchedule: process.env.PATTERN_SYNTH_CRON ?? '0 2 * * 0',
   }
 }

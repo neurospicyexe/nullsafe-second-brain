@@ -6,6 +6,7 @@ import { createPipeline } from './pipeline.js'
 import { runGapDetector } from './gap-detector.js'
 import { runDriftEvaluation } from './evaluator.js'
 import { runSitPrompts } from './sit-prompts.js'
+import { runPatternSynthesis } from './pattern-synthesizer.js'
 
 export function startIngestionScheduler(
   config: IngestionConfig,
@@ -59,6 +60,20 @@ export function startIngestionScheduler(
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       console.error(`[ingestion] sit-prompts error: ${msg}`)
+    }
+  })
+
+  // Pattern synthesis: runs weekly (default: Sunday 2am, configurable via PATTERN_SYNTH_CRON).
+  // Pulls last 30d of companion writes, identifies recurring patterns via DeepSeek,
+  // writes synthesis back to companion_journal tagged [pattern_synthesis].
+  console.log(`[ingestion] pattern-synth cron: ${config.patternSynthCronSchedule}`)
+  cron.schedule(config.patternSynthCronSchedule, async () => {
+    console.log('[ingestion] pattern-synth tick: running pattern synthesis')
+    try {
+      await runPatternSynthesis(config)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      console.error(`[ingestion] pattern-synth error: ${msg}`)
     }
   })
 }
