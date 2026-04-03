@@ -56,6 +56,7 @@ interface BasinRow {
 
 interface HistoryRow {
   drift_score: number;
+  drift_type: string;
 }
 
 interface PersonaBlockRow {
@@ -68,7 +69,7 @@ async function halsethGet(url: string, secret: string): Promise<unknown> {
   return res.json();
 }
 
-async function halsethPost(url: string, secret: string, body: unknown): Promise<void> {
+async function halsethPost(url: string, secret: string, body: unknown): Promise<unknown> {
   const res = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${secret}` },
@@ -78,6 +79,7 @@ async function halsethPost(url: string, secret: string, body: unknown): Promise<
     const text = await res.text();
     throw new Error(`Halseth POST ${url} failed: ${res.status} ${text}`);
   }
+  return res.json();
 }
 
 export async function runDriftEvaluation(
@@ -154,22 +156,35 @@ export async function runDriftEvaluation(
       console.log(`[evaluator] ${companionId}: avg=${avgScore.toFixed(3)} previous=${previousScore?.toFixed(3) ?? 'null'} type=${driftType} worst=${worstBasin}`);
 
       // 7. Write basin history record
-      await halsethPost(`${config.halsethUrl}/companion-growth/basin-history`, config.halsethSecret, {
+      const historyResult = await halsethPost(`${config.halsethUrl}/companion-growth/basin-history`, config.halsethSecret, {
         companion_id: companionId,
         drift_score: avgScore,
         drift_type: driftType,
         worst_basin: worstBasin,
         notes: `blocks_analyzed=${blocks.length} basins_checked=${basins.length}`,
-      });
+      }) as { id?: string };
 
-      // 8. If pressure: write companion_note tagged drift_flag
+      // 7b. If growth is sustained (this run AND previous run both classified growth),
+      // mark as caleth_confirmed -- intentional expansion, not noise or pressure creep.
+      const previousDriftType = historyData.history?.[0]?.drift_type ?? null;
+      if (driftType === "growth" && previousDriftType === "growth" && historyResult.id) {
+        console.log(`[evaluator] ${companionId}: sustained growth -- marking caleth_confirmed`);
+        await halsethPost(
+          `${config.halsethUrl}/companion-growth/basin-history/${historyResult.id}/confirm`,
+          config.halsethSecret,
+          {},
+        );
+      }
+
+      // 8. If pressure: write journal note tagged drift_flag
       if (driftType === "pressure") {
         console.log(`[evaluator] ${companionId}: PRESSURE DRIFT -- writing flag`);
         const noteContent = `[drift_flag] Pressure drift detected. avg_distance=${avgScore.toFixed(3)} (previous: ${previousScore?.toFixed(3) ?? 'first_run'}). Worst drifted basin: ${worstBasin}. Review recent sessions for sustained asymmetric register pressure. Self-return recommended.`;
-        await halsethPost(`${config.halsethUrl}/companion-notes`, config.halsethSecret, {
-          companion_id: companionId,
-          content: noteContent,
+        await halsethPost(`${config.halsethUrl}/companion-journal`, config.halsethSecret, {
+          agent: companionId,
+          note_text: noteContent,
           tags: ["drift_flag", "pressure_drift"],
+          source: "evaluator",
         });
       }
 
