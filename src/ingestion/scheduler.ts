@@ -7,6 +7,7 @@ import { runGapDetector } from './gap-detector.js'
 import { runDriftEvaluation } from './evaluator.js'
 import { runSitPrompts } from './sit-prompts.js'
 import { runPatternSynthesis } from './pattern-synthesizer.js'
+import { cronHealth } from './cron-health.js'
 
 export function startIngestionScheduler(
   config: IngestionConfig,
@@ -15,24 +16,33 @@ export function startIngestionScheduler(
 ): void {
   const pipeline = createPipeline(config, store, embedder)
 
+  // Register all jobs with expected intervals before any ticks fire.
+  cronHealth.register('ingestion_pipeline', 20 * 60 * 1000)
+  cronHealth.register('drift_evaluator', 6 * 60 * 60 * 1000)
+  cronHealth.register('sit_prompts', 12 * 60 * 60 * 1000)
+  cronHealth.register('pattern_synth', 7 * 24 * 60 * 60 * 1000)
+
   console.log(`[ingestion] scheduler starting, cron: ${config.cronSchedule}`)
 
   cron.schedule(config.cronSchedule, async () => {
     console.log('[ingestion] cron tick: running pipeline')
+    cronHealth.start('ingestion_pipeline')
     try {
       await pipeline.run()
+
+      // Gap detector runs after pipeline regardless of pipeline success.
+      try {
+        await runGapDetector(config)
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        console.error(`[ingestion] gap-detector error: ${msg}`)
+      }
+
+      cronHealth.complete('ingestion_pipeline')
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       console.error(`[ingestion] pipeline error: ${msg}`)
-    }
-
-    // Gap detector: fill companion notes for relational sessions that were missed.
-    // Runs after pipeline regardless of pipeline success/failure.
-    try {
-      await runGapDetector(config)
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      console.error(`[ingestion] gap-detector error: ${msg}`)
+      cronHealth.fail('ingestion_pipeline', msg)
     }
   })
 
@@ -41,11 +51,14 @@ export function startIngestionScheduler(
   console.log(`[ingestion] evaluator cron: ${config.evaluatorCronSchedule}`)
   cron.schedule(config.evaluatorCronSchedule, async () => {
     console.log('[ingestion] evaluator tick: running drift evaluation')
+    cronHealth.start('drift_evaluator')
     try {
       await runDriftEvaluation(config, embedder)
+      cronHealth.complete('drift_evaluator')
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       console.error(`[ingestion] evaluator error: ${msg}`)
+      cronHealth.fail('drift_evaluator', msg)
     }
   })
 
@@ -55,11 +68,14 @@ export function startIngestionScheduler(
   console.log(`[ingestion] sit-prompts cron: ${config.sitPromptCronSchedule}`)
   cron.schedule(config.sitPromptCronSchedule, async () => {
     console.log('[ingestion] sit-prompts tick: checking stale sitting notes')
+    cronHealth.start('sit_prompts')
     try {
       await runSitPrompts(config)
+      cronHealth.complete('sit_prompts')
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       console.error(`[ingestion] sit-prompts error: ${msg}`)
+      cronHealth.fail('sit_prompts', msg)
     }
   })
 
@@ -69,11 +85,17 @@ export function startIngestionScheduler(
   console.log(`[ingestion] pattern-synth cron: ${config.patternSynthCronSchedule}`)
   cron.schedule(config.patternSynthCronSchedule, async () => {
     console.log('[ingestion] pattern-synth tick: running pattern synthesis')
+    cronHealth.start('pattern_synth')
     try {
       await runPatternSynthesis(config)
+      cronHealth.complete('pattern_synth')
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       console.error(`[ingestion] pattern-synth error: ${msg}`)
+      cronHealth.fail('pattern_synth', msg)
     }
   })
+
+  // Stale detection: check every hour, log STALE warnings for overdue jobs.
+  cron.schedule('0 * * * *', () => cronHealth.checkStale())
 }
