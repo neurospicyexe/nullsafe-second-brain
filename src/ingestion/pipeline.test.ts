@@ -48,6 +48,7 @@ const mockConfig: IngestionConfig = {
   hwmPath: '/tmp/test-hwm.json',
   evaluatorCronSchedule: '0 */6 * * *',
   sitPromptCronSchedule: '0 */12 * * *',
+  patternSynthCronSchedule: '0 2 * * 0',
 }
 
 function makeMockStore(existsByPathResult = false) {
