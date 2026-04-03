@@ -9,6 +9,7 @@ import { mcpAuthRouter } from "@modelcontextprotocol/sdk/server/auth/router.js";
 import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
 import { loadConfig } from "./config.js";
 import { loadIngestionConfig } from "./ingestion/config.js";
+import { cronHealth } from "./ingestion/cron-health.js";
 import { createServer } from "./server.js";
 import { setupTriggers } from "./triggers.js";
 import { SingleUserOAuthProvider } from "./oauth-provider.js";
@@ -124,9 +125,18 @@ app.use((err: Error & { type?: string; status?: number }, _req: Request, res: Re
 // OAuth discovery + token endpoints — must be at app root before any guards
 app.use(mcpAuthRouter({ provider: oauthProvider, issuerUrl, resourceServerUrl }));
 
-// Health check — unauthenticated, used for uptime monitoring
+// Health check — unauthenticated, used for uptime monitoring.
+// Includes cron job status; returns 503 if any job is in error or stale.
 app.get("/health", (_req, res) => {
-  res.json({ status: "ok", service: "nullsafe-second-brain", timestamp: new Date().toISOString() });
+  cronHealth.checkStale();
+  const jobs = cronHealth.getAll();
+  const healthy = cronHealth.isHealthy();
+  res.status(healthy ? 200 : 503).json({
+    status: healthy ? "ok" : "degraded",
+    service: "nullsafe-second-brain",
+    timestamp: new Date().toISOString(),
+    crons: jobs,
+  });
 });
 
 // Bearer auth guard on all /mcp routes
