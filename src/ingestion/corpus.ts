@@ -7,6 +7,8 @@ import { semanticChunk } from './chunker.js'
 import type { SemanticChunk } from './chunker.js'
 import { wrapChunk } from './deepseek-wrapper.js'
 
+const MAX_FILE_BYTES = 512 * 1024 // 512 KB
+
 export interface CorpusOptions {
   intakeDir: string
   sourceType: SourceType
@@ -48,11 +50,34 @@ export async function processCorpus(
     const fileName = path.basename(filePath)
     console.log(`[corpus] chunking ${fileName}`)
 
+    // Check file size before reading
+    let stat: fs.Stats | null
+    try {
+      stat = fs.statSync(filePath)
+    } catch (err) {
+      console.warn(`[corpus] could not stat file, skipping: ${fileName}`)
+      totalSkipped++
+      continue
+    }
+
+    if (stat.size > MAX_FILE_BYTES) {
+      console.warn(`[corpus] skipping oversized file (${stat.size} bytes, max ${MAX_FILE_BYTES}): ${fileName}`)
+      totalSkipped++
+      continue
+    }
+
     let content: string
     try {
       content = fs.readFileSync(filePath, 'utf-8')
     } catch (err) {
-      console.error(`[corpus] failed to read ${fileName}:`, err)
+      console.error(`[corpus] failed to read file (encoding/permission error): ${fileName}`, err)
+      totalSkipped++
+      continue
+    }
+
+    if (content.trim().length === 0) {
+      console.warn(`[corpus] skipping empty file: ${fileName}`)
+      totalSkipped++
       continue
     }
 
