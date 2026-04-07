@@ -10,6 +10,7 @@
 
 import type { IngestionConfig } from './types.js'
 import { pullCompanionJournal, pullFeelings, pullRelationalState } from './puller.js'
+import { callDeepSeek } from './deepseek-client.js'
 
 const WINDOW_DAYS = 30
 const MIN_RECORDS = 5  // skip if corpus too thin
@@ -34,27 +35,6 @@ async function halsethPost(url: string, secret: string, body: unknown): Promise<
   }
 }
 
-async function callDeepSeek(apiKey: string, model: string, prompt: string): Promise<string> {
-  const res = await fetch('https://api.deepseek.com/chat/completions', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify({
-      model,
-      messages: [{ role: 'user', content: prompt }],
-      max_tokens: 800,
-      temperature: 0.4,
-    }),
-    signal: AbortSignal.timeout(30_000),
-  })
-  if (!res.ok) {
-    const text = await res.text()
-    throw new Error(`DeepSeek API failed: ${res.status} ${text}`)
-  }
-  const data = await res.json() as { choices?: { message?: { content?: string } }[] }
-  const content = data.choices?.[0]?.message?.content ?? ''
-  if (!content) throw new Error('DeepSeek returned empty content')
-  return content.trim()
-}
 
 function buildCorpus(companionId: string, records: { content: string; created_at: string }[]): string {
   const parts: string[] = []
@@ -69,8 +49,14 @@ function buildCorpus(companionId: string, records: { content: string; created_at
       const parsed = JSON.parse(rec.content) as Record<string, unknown>
       const date = rec.created_at.slice(0, 10)
 
-      // journal entry
+      // journal entry -- skip machine-generated entries to prevent feedback loops:
+      // pattern_worker (own output) and evaluator (drift diagnostics) both write
+      // back to companion_journal but are not organic companion writing.
       if (typeof parsed.note_text === 'string') {
+        const tags = Array.isArray(parsed.tags) ? parsed.tags as string[] : []
+        const machineSource = parsed.source === 'pattern_worker' || parsed.source === 'evaluator' || parsed.source === 'synthesis-gap-detector'
+        const machineTag = tags.includes('pattern_synthesis') || tags.includes('drift_flag') || tags.includes('gap-fill')
+        if (machineSource || machineTag) continue
         byType.journal.push(`[${date}] ${parsed.note_text}`)
         continue
       }
