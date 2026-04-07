@@ -39,4 +39,5 @@ export interface IngestionConfig {
   evaluatorCronSchedule: string      // default: '0 */6 * * *' (every 6h)
   sitPromptCronSchedule: string      // default: '0 */12 * * *' (twice daily)
   patternSynthCronSchedule: string   // default: '0 2 * * 0' (Sunday 2am)
+  personaFeederCronSchedule: string  // default: '30 */6 * * *' (30min before evaluator)
 }

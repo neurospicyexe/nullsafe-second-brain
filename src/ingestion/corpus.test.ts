@@ -42,6 +42,7 @@ const mockConfig: IngestionConfig = {
   evaluatorCronSchedule: '0 */6 * * *',
   sitPromptCronSchedule: '0 */12 * * *',
   patternSynthCronSchedule: '0 2 * * 0',
+  personaFeederCronSchedule: '30 */6 * * *',
 }
 
 function makeMockStore(existsByPathResult = false) {
