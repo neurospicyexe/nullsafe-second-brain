@@ -7,6 +7,7 @@ import { runGapDetector } from './gap-detector.js'
 import { runDriftEvaluation } from './evaluator.js'
 import { runSitPrompts } from './sit-prompts.js'
 import { runPatternSynthesis } from './pattern-synthesizer.js'
+import { runPersonaFeeder } from './persona-feeder.js'
 import { cronHealth } from './cron-health.js'
 
 export function startIngestionScheduler(
@@ -21,6 +22,7 @@ export function startIngestionScheduler(
   cronHealth.register('drift_evaluator', 6 * 60 * 60 * 1000)
   cronHealth.register('sit_prompts', 12 * 60 * 60 * 1000)
   cronHealth.register('pattern_synth', 7 * 24 * 60 * 60 * 1000)
+  cronHealth.register('persona_feeder', 6 * 60 * 60 * 1000)
 
   console.log(`[ingestion] scheduler starting, cron: ${config.cronSchedule}`)
 
@@ -76,6 +78,22 @@ export function startIngestionScheduler(
       const msg = err instanceof Error ? err.message : String(err)
       console.error(`[ingestion] sit-prompts error: ${msg}`)
       cronHealth.fail('sit_prompts', msg)
+    }
+  })
+
+  // Persona feeder: runs every 6h, 30min before drift evaluator (configurable via PERSONA_FEEDER_CRON).
+  // Extracts organic voice blocks from companion journal, posts to persona_blocks table.
+  console.log(`[ingestion] persona-feeder cron: ${config.personaFeederCronSchedule}`)
+  cron.schedule(config.personaFeederCronSchedule, async () => {
+    console.log('[ingestion] persona-feeder tick: extracting voice blocks')
+    cronHealth.start('persona_feeder')
+    try {
+      await runPersonaFeeder(config)
+      cronHealth.complete('persona_feeder')
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      console.error(`[ingestion] persona-feeder error: ${msg}`)
+      cronHealth.fail('persona_feeder', msg)
     }
   })
 
