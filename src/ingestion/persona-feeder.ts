@@ -7,9 +7,9 @@
 // Machine-generated entries (pattern_worker, evaluator, gap-detector) are
 // excluded -- only organic companion writing feeds persona blocks.
 
-import type { IngestionConfig } from './types.js'
+import type { IngestionConfig, IngestRecord } from './types.js'
 import { pullCompanionJournal } from './puller.js'
-import type { IngestRecord } from './types.js'
+import { callDeepSeek } from './deepseek-client.js'
 
 const WINDOW_DAYS = 7
 const MIN_RECORDS = 3
@@ -71,27 +71,6 @@ Return ONLY a JSON array, no other text:
 ${corpus}`
 }
 
-async function callDeepSeek(apiKey: string, model: string, prompt: string): Promise<string> {
-  const res = await fetch('https://api.deepseek.com/chat/completions', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify({
-      model,
-      messages: [{ role: 'user', content: prompt }],
-      max_tokens: 800,
-      temperature: 0.4,
-    }),
-    signal: AbortSignal.timeout(30_000),
-  })
-  if (!res.ok) {
-    const text = await res.text()
-    throw new Error(`DeepSeek API failed: ${res.status} ${text}`)
-  }
-  const data = await res.json() as { choices?: { message?: { content?: string } }[] }
-  const content = data.choices?.[0]?.message?.content ?? ''
-  if (!content) throw new Error('DeepSeek returned empty content')
-  return content.trim()
-}
 
 export function parseVoiceBlocks(response: string): VoiceBlock[] {
   try {
@@ -128,14 +107,14 @@ async function pruneOldBlocks(config: IngestionConfig, companionId: string): Pro
   }
 }
 
-async function postBlock(config: IngestionConfig, companionId: string, block: VoiceBlock): Promise<void> {
+async function postBlocks(config: IngestionConfig, companionId: string, blocks: VoiceBlock[]): Promise<void> {
   const res = await fetch(`${config.halsethUrl}/persona-blocks`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${config.halsethSecret}` },
     body: JSON.stringify({
       companion_id: companionId,
       channel_id: 'persona_feeder',
-      blocks: [{ block_type: block.block_type, content: block.content }],
+      blocks: blocks.map(b => ({ block_type: b.block_type, content: b.content })),
     }),
     signal: AbortSignal.timeout(15_000),
   })
@@ -173,10 +152,7 @@ export async function runPersonaFeeder(config: IngestionConfig): Promise<void> {
       }
 
       await pruneOldBlocks(config, companionId)
-
-      for (const block of blocks) {
-        await postBlock(config, companionId, block)
-      }
+      await postBlocks(config, companionId, blocks)
 
       console.log(`[persona-feeder] ${companionId}: posted ${blocks.length} block(s)`)
     } catch (err) {
