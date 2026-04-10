@@ -55,6 +55,32 @@ export function buildRetrievalTools(store: VectorStore, embedder: Embedder) {
       return { chunks: [...fmt(pool1, 1), ...fmt(pool2, 2), ...fmt(pool3, 3)] };
     },
 
+    async sb_file_chunks(args: { filename: string; limit?: number }) {
+      const limit = args.limit ?? 100;
+      const search = args.filename.trim();
+      // Try exact path first, then prefix match on rag/ paths, then LIKE anywhere
+      let chunks = store.filterByPathPrefix(`rag/historical_corpus/${search}/`, limit);
+      if (chunks.length === 0) {
+        chunks = store.filterByPathPrefix(`rag/historical_corpus/${search}`, limit);
+      }
+      if (chunks.length === 0) {
+        // Broader search: filename appears anywhere in vault_path
+        const all = store.filterByPathPrefix("", 5000);
+        chunks = all
+          .filter(c => c.vault_path.toLowerCase().includes(search.toLowerCase()))
+          .slice(0, limit);
+      }
+      return {
+        file: search,
+        total_chunks: chunks.length,
+        chunks: chunks.map((c, i) => ({
+          index: i,
+          vault_path: c.vault_path,
+          text: c.chunk_text ?? c.prefixed_text ?? "",
+        })),
+      };
+    },
+
     async sb_recall(args: { companion: string | null; content_type?: string; limit?: number }) {
       const chunks = store.queryFiltered({
         companion: args.companion,

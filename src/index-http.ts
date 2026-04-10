@@ -355,11 +355,13 @@ app.post("/ingest/corpus-file", async (req: Request, res: Response): Promise<voi
               };
 
               const wrapped = await wrapChunk(record, ingestionConfig!);
-              const embedding = await embedder.embed(wrapped);
+              const prefixedText = `[File: ${filename}]\n\n${wrapped}`;
+              const embedding = await embedder.embed(prefixedText);
 
               store.insert({
                 vault_path: vaultPath,
-                chunk_text: wrapped,
+                chunk_text: prefixedText,
+                prefixed_text: prefixedText,
                 embedding,
                 companion: null,
                 content_type: sourceType,
