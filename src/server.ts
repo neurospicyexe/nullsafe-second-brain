@@ -106,6 +106,11 @@ export function createServer(config: SecondBrainConfig) {
       { query: z.string().max(10_000), limit: z.number().optional() },
       (args) => retrieval.sb_search(args).then(ok));
 
+    server.tool("sb_file_chunks",
+      "Retrieve all chunks from a specific indexed file by filename — use to read a complete historical conversation, corpus file, or document that was chunked during ingestion. Returns chunks in order. Example filenames: 'Calethian2.md', 'spiralchoice.md'.",
+      { filename: z.string().max(256), limit: z.number().optional() },
+      (args) => retrieval.sb_file_chunks(args).then(ok));
+
     server.tool("sb_recall",
       "Retrieve recent vault entries filtered by companion and/or content type — use to recall what was written about a specific companion (drevan, cypher, gaia) or to list recent notes, documents, or session summaries.",
       { companion: z.string().nullable(), content_type: z.string().max(64).optional(), limit: z.number().optional() },

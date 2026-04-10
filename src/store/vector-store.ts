@@ -132,6 +132,13 @@ export class VectorStore {
       .map(r => this.deserialize(r));
   }
 
+  filterByPathPrefix(prefix: string, limit: number = 100): ChunkRow[] {
+    return (this.db.prepare(
+      "SELECT * FROM embeddings WHERE vault_path LIKE ? ORDER BY vault_path ASC, chunk_index ASC NULLS LAST LIMIT ?"
+    ).all(`${prefix}%`, limit) as Record<string, unknown>[])
+      .map(r => this.deserialize(r));
+  }
+
   getAll(): ChunkRow[] {
     return (this.db.prepare("SELECT * FROM embeddings").all() as Record<string, unknown>[])
       .map(r => this.deserialize(r));
