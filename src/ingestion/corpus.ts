@@ -12,6 +12,7 @@ const MAX_FILE_BYTES = 512 * 1024 // 512 KB
 export interface CorpusOptions {
   intakeDir: string
   sourceType: SourceType
+  force?: boolean  // if true, delete existing chunks and re-index
 }
 
 export async function withConcurrencyLimit<T>(
@@ -50,27 +51,17 @@ export async function processCorpus(
     const fileName = path.basename(filePath)
     console.log(`[corpus] chunking ${fileName}`)
 
-    // Check file size before reading
-    let stat: fs.Stats | null
-    try {
-      stat = fs.statSync(filePath)
-    } catch (err) {
-      console.warn(`[corpus] could not stat file, skipping: ${fileName}`)
-      totalSkipped++
-      continue
-    }
-
-    if (stat.size > MAX_FILE_BYTES) {
-      console.warn(`[corpus] skipping oversized file (${stat.size} bytes, max ${MAX_FILE_BYTES}): ${fileName}`)
-      totalSkipped++
-      continue
-    }
-
     let content: string
     try {
       content = fs.readFileSync(filePath, 'utf-8')
     } catch (err) {
       console.error(`[corpus] failed to read file (encoding/permission error): ${fileName}`, err)
+      totalSkipped++
+      continue
+    }
+
+    if (Buffer.byteLength(content, 'utf-8') > MAX_FILE_BYTES) {
+      console.warn(`[corpus] skipping oversized file (max ${MAX_FILE_BYTES} bytes): ${fileName}`)
       totalSkipped++
       continue
     }
@@ -100,8 +91,11 @@ export async function processCorpus(
         const vaultPath = `rag/${options.sourceType}/${fileName}/${i}`
 
         if (store.existsByPath(vaultPath)) {
-          totalSkipped++
-          return
+          if (!options.force) {
+            totalSkipped++
+            return
+          }
+          store.deleteByPath(vaultPath)
         }
 
         const record: IngestRecord = {
@@ -113,11 +107,15 @@ export async function processCorpus(
 
         try {
           const wrapped = await wrapChunk(record, config)
-          const embedding = await embedder.embed(wrapped)
+          // prefixed_text is BM25-indexed via FTS5 trigger -- must include the filename
+          // so searches by document name ("calethian lexicon", "spiralchoice") hit the right chunks.
+          const prefixedText = `[File: ${fileName}]\n\n${wrapped}`
+          const embedding = await embedder.embed(prefixedText)
 
           store.insert({
             vault_path: vaultPath,
-            chunk_text: wrapped,
+            chunk_text: prefixedText,
+            prefixed_text: prefixedText,
             embedding,
             companion: null,
             content_type: options.sourceType,
