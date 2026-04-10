@@ -27,10 +27,36 @@ export async function semanticChunk(
       const chunks = await chunkSegment(segment, config)
       results.push(...chunks)
     }
-    return results
+    return hardSplit(results)
   }
 
-  return chunkSegment(content, config)
+  return hardSplit(await chunkSegment(content, config))
+}
+
+const MAX_EMBED_CHARS = 24_000 // ~6000 tokens, safely under OpenAI's 8192 limit
+
+export function hardSplit(chunks: SemanticChunk[]): SemanticChunk[] {
+  const result: SemanticChunk[] = []
+  for (const chunk of chunks) {
+    if (chunk.content.length <= MAX_EMBED_CHARS) {
+      result.push(chunk)
+      continue
+    }
+    const lines = chunk.content.split('\n')
+    let part = ''
+    let partIdx = 0
+    for (const line of lines) {
+      if (part.length + line.length + 1 > MAX_EMBED_CHARS && part.length > 0) {
+        result.push({ label: `${chunk.label}-${partIdx}`, content: part.trim() })
+        partIdx++
+        part = line
+      } else {
+        part = part ? `${part}\n${line}` : line
+      }
+    }
+    if (part.trim()) result.push({ label: `${chunk.label}-${partIdx}`, content: part.trim() })
+  }
+  return result
 }
 
 export function splitIntoSegments(content: string, maxChars: number): string[] {
