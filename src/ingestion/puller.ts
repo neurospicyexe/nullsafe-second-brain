@@ -19,6 +19,8 @@ export const ALL_PULLERS: Array<{ source: SourceType; pull: PullFn }> = [
   { source: 'open_loop', pull: pullOpenLoops },
   { source: 'relational_state', pull: pullRelationalState },
   { source: 'tension', pull: pullTensions },
+  { source: 'growth_journal', pull: pullGrowthJournal },
+  { source: 'companion_conclusion', pull: pullCompanionConclusions },
 ]
 
 // Exported so tests can verify URL construction directly.
@@ -67,6 +69,7 @@ interface RawSynthesisSummary {
   emotional_register?: string
   open_threads?: string
   drevan_state?: string
+  thread_key?: string
   created_at: string
 }
 
@@ -83,6 +86,7 @@ export async function pullSynthesisSummaries(
       content: JSON.stringify(rec),
       created_at: rec.created_at,
       companion_id: rec.companion_id,
+      thread_key: rec.thread_key,
     }))
     return { records }
   } catch (e) {
@@ -228,6 +232,67 @@ export async function pullHandoffs(
       content: JSON.stringify(rec),
       created_at: rec.created_at,
       companion_id: rec.agent_id,
+    }))
+    return { records }
+  } catch (e) {
+    return { records: [], error: (e as Error).message }
+  }
+}
+
+// ── Growth layer (migration 0045) ────────────────────────────────────────────
+
+interface RawGrowthJournal {
+  id: string
+  companion_id: string
+  entry_type: string
+  content: string
+  source: string
+  tags_json: string
+  created_at: string
+}
+
+export async function pullGrowthJournal(
+  config: IngestionConfig,
+  since?: string,
+): Promise<PullerResult> {
+  try {
+    const url = buildUrl(config.halsethUrl, '/ingest/growth-journal', since)
+    const raw = await fetchRecords(url, config.halsethSecret)
+    const records: IngestRecord[] = (raw as RawGrowthJournal[]).map((rec) => ({
+      id: rec.id as unknown as number,
+      source_type: 'growth_journal',
+      content: JSON.stringify(rec),
+      created_at: rec.created_at,
+      companion_id: rec.companion_id,
+    }))
+    return { records }
+  } catch (e) {
+    return { records: [], error: (e as Error).message }
+  }
+}
+
+interface RawCompanionConclusion {
+  id: string
+  companion_id: string
+  conclusion_text: string
+  source_sessions: string | null
+  superseded_by: string | null
+  created_at: string
+}
+
+export async function pullCompanionConclusions(
+  config: IngestionConfig,
+  since?: string,
+): Promise<PullerResult> {
+  try {
+    const url = buildUrl(config.halsethUrl, '/ingest/companion-conclusions', since)
+    const raw = await fetchRecords(url, config.halsethSecret)
+    const records: IngestRecord[] = (raw as RawCompanionConclusion[]).map((rec) => ({
+      id: rec.id as unknown as number,
+      source_type: 'companion_conclusion',
+      content: JSON.stringify(rec),
+      created_at: rec.created_at,
+      companion_id: rec.companion_id,
     }))
     return { records }
   } catch (e) {
