@@ -143,9 +143,11 @@ describe('processCorpus', () => {
     expect(embedder.embed).toHaveBeenCalledTimes(2)
     expect(store.insert).toHaveBeenCalledTimes(2)
 
+    const prefixed0 = '[File: convo1.md]\n\nwrapped text'
     expect(store.insert).toHaveBeenCalledWith({
       vault_path: 'rag/historical_corpus/convo1.md/0',
-      chunk_text: 'wrapped text',
+      chunk_text: prefixed0,
+      prefixed_text: prefixed0,
       embedding: [0.1, 0.2],
       companion: null,
       content_type: 'historical_corpus',
@@ -153,7 +155,8 @@ describe('processCorpus', () => {
     })
     expect(store.insert).toHaveBeenCalledWith({
       vault_path: 'rag/historical_corpus/convo1.md/1',
-      chunk_text: 'wrapped text',
+      chunk_text: prefixed0,
+      prefixed_text: prefixed0,
       embedding: [0.1, 0.2],
       companion: null,
       content_type: 'historical_corpus',
