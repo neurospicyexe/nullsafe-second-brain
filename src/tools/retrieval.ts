@@ -65,10 +65,7 @@ export function buildRetrievalTools(store: VectorStore, embedder: Embedder) {
       }
       if (chunks.length === 0) {
         // Broader search: filename appears anywhere in vault_path
-        const all = store.filterByPathPrefix("", 5000);
-        chunks = all
-          .filter(c => c.vault_path.toLowerCase().includes(search.toLowerCase()))
-          .slice(0, limit);
+        chunks = store.filterByPathContains(search, limit);
       }
       return {
         file: search,
