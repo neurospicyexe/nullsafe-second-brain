@@ -94,13 +94,15 @@ export class CouchDBAdapter implements VaultAdapter {
     if (!meta || meta.deleted) throw new Error(`File not found: ${path}`);
 
     const children = (meta.children as string[]) ?? [];
-    const parts: string[] = [];
-    for (const chunkId of children) {
-      const chunk = await this.getDoc(chunkId);
-      if (!chunk) throw new Error(`Missing chunk ${chunkId} for ${path}`);
-      parts.push(chunk.data as string);
-    }
-    return parts.join("");
+    // Fetch all chunks concurrently -- they're independent and order is preserved by index.
+    const chunkDocs = await Promise.all(
+      children.map(async (chunkId) => {
+        const chunk = await this.getDoc(chunkId);
+        if (!chunk) throw new Error(`Missing chunk ${chunkId} for ${path}`);
+        return chunk.data as string;
+      })
+    );
+    return chunkDocs.join("");
   }
 
   async exists(path: string): Promise<boolean> {
@@ -110,19 +112,19 @@ export class CouchDBAdapter implements VaultAdapter {
 
   async list(dirPath = ""): Promise<string[]> {
     const prefix = dirPath ? (dirPath.endsWith("/") ? dirPath : dirPath + "/") : "";
-    const res = await fetch(`${this.baseUrl}/_all_docs?include_docs=true`, {
+    // No include_docs -- chunk blobs (h: prefix) would be transferred and immediately discarded.
+    // Deleted/versioninfo filtering happens at read time; listing only needs names.
+    const res = await fetch(`${this.baseUrl}/_all_docs`, {
       signal: AbortSignal.timeout(30_000),
       headers: this.headers(),
     });
     if (!res.ok) throw new Error(`CouchDB _all_docs failed: ${res.status}`);
-    const result = await res.json() as { rows: Array<{ id: string; doc: Record<string, unknown> }> };
+    const result = await res.json() as { rows: Array<{ id: string }> };
     return result.rows
       .filter(r =>
         !r.id.startsWith("h:") &&
         !r.id.startsWith("_") &&
         r.id !== "obsydian_livesync_version" &&
-        !r.doc.deleted &&
-        r.doc.type !== "versioninfo" &&
         (prefix === "" || r.id.startsWith(prefix))
       )
       .map(r => r.id);

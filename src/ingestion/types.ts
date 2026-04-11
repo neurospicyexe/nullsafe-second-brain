@@ -12,6 +12,8 @@ export type SourceType =
   | 'open_loop'
   | 'relational_state'
   | 'tension'
+  | 'growth_journal'
+  | 'companion_conclusion'
 
 export interface IngestRecord {
   id: number
