@@ -4,6 +4,18 @@
 
 Part of the BBH suite -- see root `CLAUDE.md` for cross-project context.
 
+## Multi-Agent System Conventions
+
+When making changes to one identity/config file (e.g., Cypher), always check and apply the same changes to ALL sibling identity files (e.g., Drevan, Gaia, and any others in the same directory).
+
+## Project Scope
+
+When reviewing or fixing bugs across the multi-agent system, always scan ALL projects: Phoenix, Hearth, relay, discord_bot, and any archived directories. Never assume a directory doesn't exist without checking.
+
+## Testing
+
+After implementing any TypeScript changes, run the integration/unit tests before committing. If tests fail, fix all errors (including missing metadata fields, wrong types, empty block formatting) before marking the task complete.
+
 ## Commands
 
 | Command | Purpose |
@@ -56,15 +68,26 @@ Live as of 2026-03-26. Runs inside this process via `src/ingestion/`.
 
 ```
 src/ingestion/
-  types.ts          SourceType, IngestRecord, IngestionConfig
-  config.ts         loadIngestionConfig() -- env vars: DEEPSEEK_API_KEY, HALSETH_URL, etc.
-  hwm.ts            High-water mark store (SQLite) -- per-source dedup
-  puller.ts         6-source Halseth puller (feelings, deltas, journal, summaries, observations, notes)
-  deepseek-wrapper.ts  Wraps each record with narrative framing via DeepSeek
-  chunker.ts        semanticChunk() -- splits large files at topic/emotional pivots via DeepSeek
-  corpus.ts         processCorpus() -- batch indexer for raw .md files
-  pipeline.ts       Full pull → wrap → embed → insert pipeline with HWM + dedup
-  scheduler.ts      Cron: runs pipeline every 20 minutes
+  types.ts                SourceType, IngestRecord, IngestionConfig
+  config.ts               loadIngestionConfig() -- env vars: DEEPSEEK_API_KEY, HALSETH_URL, etc.
+  hwm.ts                  High-water mark store (SQLite) -- per-source dedup
+  puller.ts               13-source Halseth puller (feelings, relational_delta, companion_journal,
+                          synthesis_summary, inter_companion_note, handoff, wound, companion_dream,
+                          open_loop, relational_state, tension, growth_journal, companion_conclusion)
+  deepseek-client.ts      Shared DeepSeek HTTP client (extracted from deepseek-wrapper)
+  deepseek-wrapper.ts     Wraps each record with narrative framing via DeepSeek
+  chunker.ts              semanticChunk() -- splits large files at topic/emotional pivots via DeepSeek
+  corpus.ts               processCorpus() -- batch indexer for raw .md files
+  gap-detector.ts         Synthesis gap detector -- finds relational sessions missing companion notes
+  evaluator.ts            Drift evaluator -- classifyDrift per companion, every 6h
+  sit-prompts.ts          Sit & resolve -- flags stale sitting notes for next companion boot, every 12h
+  persona-feeder.ts       Extracts organic voice blocks from companion journal → persona_blocks, every 6h
+  pattern-synthesizer.ts  Weekly synthesis of companion write corpus → [pattern_synthesis] journal entries
+  cron-health.ts          Process-level cron health tracking for all 5 registered jobs
+  pipeline.ts             Full pull → wrap → embed → insert pipeline with HWM + dedup;
+                          skips machine-generated journal entries (pattern_worker, evaluator, synthesis-gap-detector)
+  scheduler.ts            5 cron jobs: ingestion (20min), drift evaluator (6h), persona feeder (6h),
+                          sit prompts (12h), pattern synth (weekly) + hourly stale check
 scripts/
   run-corpus.ts     CLI for one-shot historical backfill
 ```

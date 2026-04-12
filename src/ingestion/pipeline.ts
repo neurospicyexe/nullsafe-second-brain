@@ -1,9 +1,22 @@
 import type { IngestionConfig } from './types.js'
+import type { IngestRecord } from './types.js'
 import type { VectorStore } from '../store/vector-store.js'
 import type { OpenAIEmbedder } from '../embeddings/openai-embedder.js'
 import { ALL_PULLERS } from './puller.js'
 import { wrapChunk } from './deepseek-wrapper.js'
 import { loadHwm, saveHwm, getHwm, setHwm } from './hwm.js'
+
+// Sources that write machine-generated entries back to companion_journal.
+// Embedding these pollutes semantic search with diagnostic/synthetic text.
+const MACHINE_JOURNAL_SOURCES = new Set(['pattern_worker', 'evaluator', 'synthesis-gap-detector'])
+
+function isMachineGenerated(record: IngestRecord): boolean {
+  if (record.source_type !== 'companion_journal') return false
+  try {
+    const parsed = JSON.parse(record.content) as Record<string, unknown>
+    return typeof parsed.source === 'string' && MACHINE_JOURNAL_SOURCES.has(parsed.source)
+  } catch { return false }
+}
 
 export class IngestionPipeline {
   constructor(
@@ -31,6 +44,15 @@ export class IngestionPipeline {
       for (const record of records) {
         const chunkId = `${record.source_type}:${record.id}`
         const vaultPath = `rag/${record.source_type}/${record.id}`
+
+        // Skip machine-generated journal entries -- embedding them pollutes
+        // semantic search and creates feedback loops on re-ingest.
+        if (isMachineGenerated(record)) {
+          console.log(`[ingestion] skip machine-generated ${chunkId}`)
+          hwm = setHwm(hwm, source, record.created_at)
+          saveHwm(this.config.hwmPath, hwm)
+          continue
+        }
 
         // Dedup: skip if already indexed
         if (this.store.existsByPath(vaultPath)) {
