@@ -127,11 +127,17 @@ export async function runDriftEvaluation(
       }
 
       // 4. Compute distance to each basin
+      const embeddedBasins = basins.filter(b => b.embedding != null);
+      if (embeddedBasins.length === 0) {
+        console.log(`[evaluator] ${companionId}: basins exist but none have embeddings yet, skipping`);
+        continue;
+      }
+
       let worstBasin = "";
       let worstDistance = -1;
       const distances: number[] = [];
 
-      for (const basin of basins) {
+      for (const basin of embeddedBasins) {
         const basinEmbedding = JSON.parse(basin.embedding) as number[];
         const dist = cosineDistance(voiceEmbedding, basinEmbedding);
         distances.push(dist);
