@@ -28,7 +28,7 @@ export class IngestionPipeline {
   async run(): Promise<void> {
     let hwm = loadHwm(this.config.hwmPath)
 
-    for (const { source, pull } of ALL_PULLERS) {
+    for (const { source, pull, isUpdate } of ALL_PULLERS) {
       const since = getHwm(hwm, source)
       console.log(`[ingestion] pulling ${source} since ${since ?? 'beginning'}`)
 
@@ -54,10 +54,14 @@ export class IngestionPipeline {
           continue
         }
 
-        // Dedup: skip if already indexed
+        // Dedup: skip if already indexed (unless this is an update sweep -- delete and re-index)
         if (this.store.existsByPath(vaultPath)) {
-          console.log(`[ingestion] skip duplicate ${chunkId}`)
-          continue
+          if (!isUpdate) {
+            console.log(`[ingestion] skip duplicate ${chunkId}`)
+            continue
+          }
+          this.store.deleteByPath(vaultPath)
+          console.log(`[ingestion] update ${chunkId} -- replaced stale entry`)
         }
 
         try {
