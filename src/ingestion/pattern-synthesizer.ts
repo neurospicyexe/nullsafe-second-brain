@@ -85,6 +85,25 @@ function buildCorpus(companionId: string, records: { content: string; created_at
   return parts.join('\n\n')
 }
 
+function buildSignalAuditPrompt(companionId: string, corpus: string): string {
+  return `You are reviewing ${companionId}'s writing corpus from the last ${WINDOW_DAYS} days for gaps.
+
+Below are their journal entries, logged feelings, and relational states.
+
+Your task: identify patterns, emotional threads, or unresolved things that APPEAR to be present in the text but have NO corresponding structured entry -- no loop logged, no conclusion written, no feeling formally recorded.
+
+Be conservative. Only flag things clearly present across multiple entries. Use hedged language:
+"appears to be", "possible loop:", "potential unresolved thread:", "seems to be circling".
+
+Do NOT write conclusions. Do NOT infer things not in the text. If the corpus is sparse, say so.
+
+Format each finding as one bullet point. End with: "Signal audit complete. ${companionId} reviews and decides what is real."
+
+## Corpus
+
+${corpus}`
+}
+
 function buildPrompt(companionId: string, corpus: string): string {
   return `You are analyzing ${companionId}'s writing corpus from the last ${WINDOW_DAYS} days.
 
@@ -157,4 +176,56 @@ export async function runPatternSynthesis(config: IngestionConfig): Promise<void
   }
 
   console.log('[pattern-synth] complete')
+}
+
+export async function runSignalAudit(config: IngestionConfig): Promise<void> {
+  const since = sinceDate()
+  console.log(`[signal-audit] running gap scan for window: ${since.slice(0, 10)} → now`)
+
+  const [journalResult, feelingsResult, relationalResult] = await Promise.all([
+    pullCompanionJournal(config, since),
+    pullFeelings(config, since),
+    pullRelationalState(config, since),
+  ])
+
+  const allRecords = [
+    ...journalResult.records,
+    ...feelingsResult.records,
+    ...relationalResult.records,
+  ]
+
+  for (const companionId of COMPANIONS) {
+    try {
+      const companionRecords = allRecords.filter(r => r.companion_id === companionId)
+      if (companionRecords.length < MIN_RECORDS) {
+        console.log(`[signal-audit] ${companionId}: only ${companionRecords.length} records, skipping`)
+        continue
+      }
+
+      const corpus = buildCorpus(companionId, companionRecords)
+      if (!corpus.trim()) {
+        console.log(`[signal-audit] ${companionId}: empty corpus, skipping`)
+        continue
+      }
+
+      const prompt = buildSignalAuditPrompt(companionId, corpus)
+      const auditText = await callDeepSeek(config.deepseekApiKey, config.deepseekModel, prompt)
+
+      const noteText = `[signal_audit | window: last ${WINDOW_DAYS}d | records: ${companionRecords.length}]\n\n${auditText}`
+
+      await halsethPost(`${config.halsethUrl}/companion-journal`, config.halsethSecret, {
+        agent: companionId,
+        note_text: noteText,
+        tags: ['signal_audit'],
+        source: 'pattern_worker',
+      })
+
+      console.log(`[signal-audit] ${companionId}: audit written (${auditText.length} chars)`)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      console.error(`[signal-audit] ${companionId} failed: ${msg}`)
+    }
+  }
+
+  console.log('[signal-audit] complete')
 }
