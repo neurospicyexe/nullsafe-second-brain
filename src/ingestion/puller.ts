@@ -7,7 +7,9 @@ export interface PullerResult {
 
 type PullFn = (config: IngestionConfig, since?: string) => Promise<PullerResult>
 
-export const ALL_PULLERS: Array<{ source: SourceType; pull: PullFn }> = [
+// isUpdate: if true, pipeline deletes the existing vector entry before re-indexing
+// instead of skipping duplicates. Used for sources where records mutate after creation.
+export const ALL_PULLERS: Array<{ source: string; pull: PullFn; isUpdate?: boolean }> = [
   { source: 'synthesis_summary', pull: pullSynthesisSummaries },
   { source: 'relational_delta', pull: pullRelationalDeltas },
   { source: 'feeling', pull: pullFeelings },
@@ -19,6 +21,7 @@ export const ALL_PULLERS: Array<{ source: SourceType; pull: PullFn }> = [
   { source: 'open_loop', pull: pullOpenLoops },
   { source: 'relational_state', pull: pullRelationalState },
   { source: 'tension', pull: pullTensions },
+  { source: 'tension_update', pull: pullTensionUpdates, isUpdate: true },
   { source: 'growth_journal', pull: pullGrowthJournal },
   { source: 'companion_conclusion', pull: pullCompanionConclusions },
 ]
@@ -444,6 +447,32 @@ export async function pullTensions(
       created_at: rec.first_noted_at,  // first_noted_at is the canonical timestamp
       companion_id: rec.companion_id,
     }))
+    return { records }
+  } catch (e) {
+    return { records: [], error: (e as Error).message }
+  }
+}
+
+// Sweeps for status changes on existing tensions using last_surfaced_at as the HWM.
+// Returns the same source_type ('tension') so the pipeline overwrites the stale vector entry.
+export async function pullTensionUpdates(
+  config: IngestionConfig,
+  since?: string,
+): Promise<PullerResult> {
+  try {
+    const url = new URL('/ingest/tensions', config.halsethUrl)
+    if (since) url.searchParams.set('updated_since', since)
+    url.searchParams.set('limit', '100')
+    const raw = await fetchRecords(url.toString(), config.halsethSecret)
+    const records: IngestRecord[] = (raw as RawTension[])
+      .filter((rec) => rec.last_surfaced_at != null)
+      .map((rec) => ({
+        id: rec.id as unknown as number,
+        source_type: 'tension',
+        content: JSON.stringify(rec),
+        created_at: rec.last_surfaced_at!,  // HWM tracks last_surfaced_at for this sweep
+        companion_id: rec.companion_id,
+      }))
     return { records }
   } catch (e) {
     return { records: [], error: (e as Error).message }
