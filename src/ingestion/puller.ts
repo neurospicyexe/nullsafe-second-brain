@@ -461,12 +461,12 @@ export async function pullTensionUpdates(
 ): Promise<PullerResult> {
   try {
     const url = new URL('/ingest/tensions', config.halsethUrl)
-    if (since) url.searchParams.set('updated_since', since)
+    // Always send updated_since (epoch on first run) to force last_surfaced_at ASC ordering
+    // and server-side null filter, so the HWM advances correctly from the start.
+    url.searchParams.set('updated_since', since ?? '1970-01-01T00:00:00.000Z')
     url.searchParams.set('limit', '100')
     const raw = await fetchRecords(url.toString(), config.halsethSecret)
-    const records: IngestRecord[] = (raw as RawTension[])
-      .filter((rec) => rec.last_surfaced_at != null)
-      .map((rec) => ({
+    const records: IngestRecord[] = (raw as RawTension[]).map((rec) => ({
         id: rec.id as unknown as number,
         source_type: 'tension',
         content: JSON.stringify(rec),
