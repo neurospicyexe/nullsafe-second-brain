@@ -17,6 +17,7 @@ import { semanticChunk } from "./ingestion/chunker.js";
 import { wrapChunk } from "./ingestion/deepseek-wrapper.js";
 import { withConcurrencyLimit } from "./ingestion/corpus.js";
 import type { SourceType, IngestRecord } from "./ingestion/types.js";
+import { IngestionPipeline } from "./ingestion/pipeline.js";
 
 // ── Startup ──────────────────────────────────────────────────────────────────
 
@@ -382,6 +383,46 @@ app.post("/ingest/corpus-file", async (req: Request, res: Response): Promise<voi
     })();
   } catch (err) {
     console.error("[ingest/corpus-file] error:", err);
+    if (!res.headersSent) res.status(500).json({ error: "internal error" });
+  }
+});
+
+// POST /ingest/session -- triggered by Halseth session-close webhook.
+// Runs the ingestion pipeline immediately instead of waiting up to 20 min for the cron.
+// Body: { companion_id: string, session_id: string }
+app.post("/ingest/session", async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { companion_id, session_id } = req.body ?? {};
+
+    if (typeof companion_id !== "string" || !companion_id.trim()) {
+      res.status(400).json({ error: "companion_id is required" });
+      return;
+    }
+    if (typeof session_id !== "string" || !session_id.trim()) {
+      res.status(400).json({ error: "session_id is required" });
+      return;
+    }
+
+    // Respond immediately -- pipeline runs in background.
+    res.status(202).json({ message: "accepted", companion_id, session_id });
+
+    // Background: run full pipeline (HWM-based, idempotent -- only ingests new records).
+    (async () => {
+      console.log(`[ingest/session] webhook: companion=${companion_id} session=${session_id}`);
+      try {
+        if (!ingestionConfig) {
+          console.warn("[ingest/session] ingestion config unavailable -- skipping");
+          return;
+        }
+        const pipeline = new IngestionPipeline(ingestionConfig, store, embedder);
+        await pipeline.run();
+        console.log(`[ingest/session] pipeline complete for companion=${companion_id}`);
+      } catch (err) {
+        console.error("[ingest/session] pipeline error:", err);
+      }
+    })();
+  } catch (err) {
+    console.error("[ingest/session] error:", err);
     if (!res.headersSent) res.status(500).json({ error: "internal error" });
   }
 });
