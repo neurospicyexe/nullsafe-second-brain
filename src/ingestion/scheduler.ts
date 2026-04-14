@@ -146,7 +146,6 @@ export function startIngestionScheduler(
     cronHealth.start('pattern_synth')
     try {
       await runPatternSynthesis(config)
-      await runSignalAudit(config)
       cronHealth.complete('pattern_synth')
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
@@ -154,6 +153,13 @@ export function startIngestionScheduler(
       cronHealth.fail('pattern_synth', msg)
     } finally {
       patternSynthRunning = false
+    }
+
+    try {
+      await runSignalAudit(config)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      console.error(`[ingestion] signal-audit outer error: ${msg}`)
     }
   })
 
