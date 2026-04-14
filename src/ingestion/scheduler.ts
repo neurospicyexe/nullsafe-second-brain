@@ -6,7 +6,7 @@ import { createPipeline } from './pipeline.js'
 import { runGapDetector } from './gap-detector.js'
 import { runDriftEvaluation } from './evaluator.js'
 import { runSitPrompts } from './sit-prompts.js'
-import { runPatternSynthesis } from './pattern-synthesizer.js'
+import { runPatternSynthesis, runSignalAudit } from './pattern-synthesizer.js'
 import { runPersonaFeeder } from './persona-feeder.js'
 import { cronHealth } from './cron-health.js'
 
@@ -146,6 +146,7 @@ export function startIngestionScheduler(
     cronHealth.start('pattern_synth')
     try {
       await runPatternSynthesis(config)
+      await runSignalAudit(config)
       cronHealth.complete('pattern_synth')
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
