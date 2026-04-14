@@ -390,6 +390,7 @@ app.post("/ingest/corpus-file", async (req: Request, res: Response): Promise<voi
 // POST /ingest/session -- triggered by Halseth session-close webhook.
 // Runs the ingestion pipeline immediately instead of waiting up to 20 min for the cron.
 // Body: { companion_id: string, session_id: string }
+let sessionIngestRunning = false;
 app.post("/ingest/session", async (req: Request, res: Response): Promise<void> => {
   try {
     const { companion_id, session_id } = req.body ?? {};
@@ -407,7 +408,13 @@ app.post("/ingest/session", async (req: Request, res: Response): Promise<void> =
     res.status(202).json({ message: "accepted", companion_id, session_id });
 
     // Background: run full pipeline (HWM-based, idempotent -- only ingests new records).
+    // Guard against simultaneous runs from rapid session closes -- same pattern as the scheduler.
     (async () => {
+      if (sessionIngestRunning) {
+        console.warn(`[ingest/session] pipeline already running, skipping for companion=${companion_id} session=${session_id}`);
+        return;
+      }
+      sessionIngestRunning = true;
       console.log(`[ingest/session] webhook: companion=${companion_id} session=${session_id}`);
       try {
         if (!ingestionConfig) {
@@ -419,6 +426,8 @@ app.post("/ingest/session", async (req: Request, res: Response): Promise<void> =
         console.log(`[ingest/session] pipeline complete for companion=${companion_id}`);
       } catch (err) {
         console.error("[ingest/session] pipeline error:", err);
+      } finally {
+        sessionIngestRunning = false;
       }
     })();
   } catch (err) {
