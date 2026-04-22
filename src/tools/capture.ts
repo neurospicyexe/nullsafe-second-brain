@@ -38,5 +38,14 @@ export function buildCaptureTools(indexer: Indexer, resolver: RouteResolver) {
       await indexer.write({ path: finalPath, content: args.content, companion: null, content_type: "observation", tags });
       return { path: finalPath };
     },
+
+    async sb_ingest_raw(args: { title: string; content: string; companion?: string; tags?: string[] }) {
+      const companion = args.companion?.toLowerCase() ?? null;
+      const tags = args.tags ?? [];
+      const slug = args.title.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 100);
+      const finalPath = `raziel/sessions/transcripts/${slug}.md`;
+      await indexer.write({ path: finalPath, content: args.content, companion, content_type: "document", tags, overwrite: true });
+      return { path: finalPath };
+    },
   };
 }
