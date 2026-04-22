@@ -18,25 +18,22 @@ export class HalsethClient {
     return response.json() as Promise<T>;
   }
 
-  // Fetch a single session by id.
-  // Requires GET /sessions/:id endpoint (added to halseth 2026-03-13).
   async getSession(id: string): Promise<Record<string, unknown>> {
     return this.get(`/sessions/${encodeURIComponent(id)}`);
   }
 
-  // Fetch sessions from the last N days.
-  // Requires GET /sessions?days=N endpoint (added to halseth 2026-03-13).
   async getRecentSessions(days = 7): Promise<Record<string, unknown>[]> {
     return this.get(`/sessions?days=${days}`);
   }
 
-  // Fetch relational deltas from the last N days.
-  // GET /deltas does not accept a ?days= param — fetches a large batch
-  // and filters client-side by created_at.
-  // NOTE: hard limit of 200. Deltas beyond that are silently excluded.
-  // If a high-volume week exceeds this, increase the limit here.
+  // GET /deltas has no server-side date filter -- fetches a fixed batch and filters client-side.
+  // If result hits 200 rows, older deltas in the window are silently excluded.
+  // To fix properly: add ?since= param to the Halseth /deltas endpoint.
   async getRecentDeltas(days = 7): Promise<Record<string, unknown>[]> {
     const all = await this.get<Record<string, unknown>[]>(`/deltas?limit=200`);
+    if (all.length >= 200) {
+      console.warn(`[HalsethClient] getRecentDeltas: hit 200-row cap — deltas past row 200 silently excluded. Increase limit or add server-side date filter to /deltas.`);
+    }
     const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
     return all.filter(d => {
       const ts = d.created_at as string | undefined;
@@ -44,11 +41,13 @@ export class HalsethClient {
     });
   }
 
-  // Fetch a handover by session_id.
-  // GET /handovers returns a list; we find the matching one client-side.
-  // NOTE: hard limit of 100. Returns null if the handover is older than the 100 most recent.
+  // GET /handovers returns a fixed batch; match by session_id client-side.
+  // If result hits 100 rows, the target handover may be past the cap and return null.
   async getHandover(sessionId: string): Promise<Record<string, unknown> | null> {
     const all = await this.get<Record<string, unknown>[]>(`/handovers?limit=100`);
+    if (all.length >= 100) {
+      console.warn(`[HalsethClient] getHandover: hit 100-row cap — handover for ${sessionId} may be past the limit.`);
+    }
     return all.find(h => h.session_id === sessionId) ?? null;
   }
 
