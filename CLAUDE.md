@@ -110,7 +110,6 @@ Setup checklist, architecture, and debugging history: `docs/deployment.md`
 ## Security
 
 OWASP full audit + vibesec deep scan 2026-03-13.
-**Immediate action still open: rotate `http.api_key` on VPS** (key exposed in chat 2026-03-11).
 Open findings: `docs/security-audit.md`
 
 # context-mode — MANDATORY routing rules
