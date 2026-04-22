@@ -89,6 +89,11 @@ export function createServer(config: SecondBrainConfig) {
       { content: z.string().max(MAX_CONTENT_LENGTH), tags: z.array(z.string()).max(50).optional() },
       (args) => run("sb_log_observation", () => capture.sb_log_observation(args)));
 
+    server.tool("sb_ingest_raw",
+      "Index raw text directly into the vault without synthesis — use for session transcripts, raw exchange pairs, or verbatim records that should be searchable but not summarized. Always overwrites. Stored in raziel/sessions/transcripts/.",
+      { title: z.string().max(256), content: z.string().max(MAX_CONTENT_LENGTH), companion: z.string().max(64).optional(), tags: z.array(z.string()).max(20).optional() },
+      (args) => run("sb_ingest_raw", () => capture.sb_ingest_raw(args)));
+
     // ── Synthesis tools ───────────────────────────────────────────────────────
     server.tool("sb_synthesize_session",
       "Pull a Halseth session by ID and write a structured session summary note into the vault — use after a significant session closes to preserve what happened, who was front, emotional state, and anchors.",
