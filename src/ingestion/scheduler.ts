@@ -22,6 +22,7 @@ export function startIngestionScheduler(
   cronHealth.register('drift_evaluator', 6 * 60 * 60 * 1000)
   cronHealth.register('sit_prompts', 12 * 60 * 60 * 1000)
   cronHealth.register('pattern_synth', 7 * 24 * 60 * 60 * 1000)
+  cronHealth.register('signal_audit',  7 * 24 * 60 * 60 * 1000)
   cronHealth.register('persona_feeder', 6 * 60 * 60 * 1000)
 
   console.log(`[ingestion] scheduler starting, cron: ${config.cronSchedule}`)
@@ -155,11 +156,14 @@ export function startIngestionScheduler(
       patternSynthRunning = false
     }
 
+    cronHealth.start('signal_audit')
     try {
       await runSignalAudit(config)
+      cronHealth.complete('signal_audit')
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      console.error(`[ingestion] signal-audit outer error: ${msg}`)
+      console.error(`[ingestion] signal-audit error: ${msg}`)
+      cronHealth.fail('signal_audit', msg)
     }
   })
 

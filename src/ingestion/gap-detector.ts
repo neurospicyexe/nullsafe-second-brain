@@ -47,6 +47,7 @@ async function callDeepSeek(
 ): Promise<string> {
   const response = await fetch('https://api.deepseek.com/chat/completions', {
     method: 'POST',
+    signal: AbortSignal.timeout(30_000),
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${config.deepseekApiKey}`,
