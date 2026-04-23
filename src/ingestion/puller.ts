@@ -19,6 +19,7 @@ export const ALL_PULLERS: Array<{ source: string; pull: PullFn; isUpdate?: boole
   { source: 'wound', pull: pullWounds },
   { source: 'companion_dream', pull: pullCompanionDreams },
   { source: 'open_loop', pull: pullOpenLoops },
+  { source: 'open_loop_closure', pull: pullClosedOpenLoops, isUpdate: true },
   { source: 'relational_state', pull: pullRelationalState },
   { source: 'tension', pull: pullTensions },
   { source: 'tension_update', pull: pullTensionUpdates, isUpdate: true },
@@ -385,6 +386,32 @@ export async function pullOpenLoops(
       source_type: 'open_loop',
       content: JSON.stringify(rec),
       created_at: rec.opened_at,   // opened_at is the canonical timestamp
+      companion_id: rec.companion_id,
+    }))
+    return { records }
+  } catch (e) {
+    return { records: [], error: (e as Error).message }
+  }
+}
+
+// Sweeps for loop closures using closed_at as the HWM.
+// Returns source_type 'open_loop' so the pipeline overwrites the stale vector entry.
+export async function pullClosedOpenLoops(
+  config: IngestionConfig,
+  since?: string,
+): Promise<PullerResult> {
+  try {
+    const url = new URL('/ingest/open-loops', config.halsethUrl)
+    // Always send closed_since (epoch on first run) to force closed_at ASC ordering
+    // and server-side null filter, so the HWM advances correctly from the start.
+    url.searchParams.set('closed_since', since ?? '1970-01-01T00:00:00.000Z')
+    url.searchParams.set('limit', '100')
+    const raw = await fetchRecords(url.toString(), config.halsethSecret)
+    const records: IngestRecord[] = (raw as RawOpenLoop[]).map((rec) => ({
+      id: rec.id as unknown as number,
+      source_type: 'open_loop',
+      content: JSON.stringify(rec),
+      created_at: rec.closed_at!,  // HWM tracks closed_at for this sweep
       companion_id: rec.companion_id,
     }))
     return { records }
