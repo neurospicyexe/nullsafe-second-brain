@@ -11,12 +11,16 @@ Can run locally (stdio transport for Claude Desktop) or on a VPS (HTTP/OAuth tra
 
 ---
 
+**Not sure where to start?** See [INSTALL.md](./INSTALL.md) for a beginner-friendly guide covering both local and VPS setup.
+
+---
+
 ## What you need before starting
 
 - [Node.js](https://nodejs.org) v20 or higher
 - [Obsidian](https://obsidian.md) with a vault already created (free)
 - An [OpenAI API key](https://platform.openai.com/api-keys) (for embeddings — the semantic search part)
-- [Halseth](https://github.com/your-username/halseth) deployed and running
+- [Halseth](https://github.com/neurospicyexe/halseth) deployed and running
 
 ---
 
@@ -25,7 +29,7 @@ Can run locally (stdio transport for Claude Desktop) or on a VPS (HTTP/OAuth tra
 ### 1. Clone and install
 
 ```bash
-git clone https://github.com/your-username/nullsafe-second-brain
+git clone https://github.com/neurospicyexe/nullsafe-second-brain
 cd nullsafe-second-brain
 npm install
 ```
@@ -160,6 +164,6 @@ npm run build  # compile to dist/
 
 | Project | What it does |
 |---------|-------------|
-| [Halseth](https://github.com/your-username/halseth) | The data backend this reads from |
-| [Hearth](https://github.com/your-username/hearth) | Visual dashboard (reads `_recent-patterns.md` this generates) |
-| [nullsafe-plural-v2](https://github.com/your-username/nullsafe-plural-v2) | SimplyPlural fronting integration |
+| [Halseth](https://github.com/neurospicyexe/halseth) | The data backend this reads from |
+| [Hearth](https://github.com/neurospicyexe/hearth) | Visual dashboard (reads `_recent-patterns.md` this generates) |
+| [nullsafe-plural-v2](https://github.com/neurospicyexe/nullsafe-plural-v2) | SimplyPlural fronting integration |
