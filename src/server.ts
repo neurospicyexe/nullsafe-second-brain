@@ -6,6 +6,8 @@ import { mkdirSync } from "fs";
 import type { SecondBrainConfig } from "./config.js";
 import { FilesystemAdapter } from "./adapters/filesystem-adapter.js";
 import { CouchDBAdapter } from "./adapters/couchdb-adapter.js";
+import { ObsidianRestAdapter } from "./adapters/obsidian-rest-adapter.js";
+import type { VaultAdapter } from "./adapters/vault-adapter.js";
 import { VectorStore } from "./store/vector-store.js";
 import { OpenAIEmbedder } from "./embeddings/openai-embedder.js";
 import { Indexer } from "./indexer.js";
@@ -20,17 +22,28 @@ import { buildSystemTools } from "./tools/system.js";
 const MAX_CONTENT_LENGTH = 1_000_000; // ~1 MB of text — change freely
 
 export function createServer(config: SecondBrainConfig) {
-  // Guard unimplemented adapters/providers
-  if (config.vault.adapter === "obsidian-rest") {
-    throw new Error('ObsidianRESTAdapter is not yet implemented. Set vault.adapter to "filesystem".');
-  }
   if (config.embeddings.provider === "ollama") {
     throw new Error('OllamaEmbedder is not yet implemented. Set embeddings.provider to "openai".');
   }
 
-  const adapter = config.couchdb
-    ? new CouchDBAdapter(config.couchdb)
-    : new FilesystemAdapter(config.vault.path);
+  // Adapter precedence: obsidian-rest (preferred) > couchdb > filesystem.
+  // obsidian-rest is the supported path for VPS → Windows vault writes via
+  // Obsidian's Local REST API plugin. CouchDBAdapter remains for legacy use
+  // but its writes are not LiveSync-compatible (chunk hash mismatch).
+  let adapter: VaultAdapter;
+  if (config.vault.adapter === "obsidian-rest") {
+    if (!config.obsidian_rest) {
+      throw new Error('vault.adapter is "obsidian-rest" but obsidian_rest config is missing.');
+    }
+    adapter = new ObsidianRestAdapter({
+      url: config.obsidian_rest.url,
+      apiKey: config.obsidian_rest.api_key,
+    });
+  } else if (config.couchdb) {
+    adapter = new CouchDBAdapter(config.couchdb);
+  } else {
+    adapter = new FilesystemAdapter(config.vault.path);
+  }
 
   const dbDir = join(homedir(), ".nullsafe-second-brain");
   mkdirSync(dbDir, { recursive: true, mode: 0o700 });

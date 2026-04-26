@@ -22,3 +22,4 @@ docs/deploy*.md
 *_CHECKLIST.md
 OPS-*.md
 DEPLOY_NOTES*.md
+.serena/
