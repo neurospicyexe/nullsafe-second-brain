@@ -144,8 +144,34 @@ app.get("/health", (_req, res) => {
 app.use("/mcp", requireBearerAuth({ verifier: oauthProvider, resourceMetadataUrl }));
 
 // ── MCP session registry ──────────────────────────────────────────────────────
+//
+// Sessions accumulate in the transport Map until transport.onclose fires, which
+// requires the client to send an explicit DELETE. Most MCP clients just disconnect.
+// Without a sweep, the Map grows unbounded — observed at 1002+ idle sessions in
+// production. Each entry tracks lastActivity; an interval evicts stale entries.
+
+const SESSION_IDLE_TIMEOUT_MS = 30 * 60 * 1000; // 30 min
+const SESSION_SWEEP_INTERVAL_MS = 5 * 60 * 1000; // 5 min
 
 const transports = new Map<string, StreamableHTTPServerTransport>();
+const lastSeen = new Map<string, number>();
+
+setInterval(() => {
+  const now = Date.now();
+  let evicted = 0;
+  for (const [sid, ts] of lastSeen) {
+    if (now - ts > SESSION_IDLE_TIMEOUT_MS) {
+      const transport = transports.get(sid);
+      try { transport?.close?.(); } catch {}
+      transports.delete(sid);
+      lastSeen.delete(sid);
+      evicted++;
+    }
+  }
+  if (evicted > 0) {
+    console.error(`[mcp] swept ${evicted} idle sessions (active: ${transports.size})`);
+  }
+}, SESSION_SWEEP_INTERVAL_MS).unref();
 
 const mcpHandler = async (req: Request, res: Response): Promise<void> => {
   try {
@@ -154,6 +180,7 @@ const mcpHandler = async (req: Request, res: Response): Promise<void> => {
     console.error(`[mcp] ${req.method} session=${sessionId?.slice(0, 8) ?? "none"} method=${method}`);
 
     if (sessionId && transports.has(sessionId)) {
+      lastSeen.set(sessionId, Date.now());
       const transport = transports.get(sessionId)!;
       await transport.handleRequest(req, res, req.body);
       return;
@@ -169,6 +196,7 @@ const mcpHandler = async (req: Request, res: Response): Promise<void> => {
         sessionIdGenerator: reuseId ? () => reuseId : () => randomUUID(),
         onsessioninitialized: (sid) => {
           transports.set(sid, transport);
+          lastSeen.set(sid, Date.now());
           const label = reuseId ? "re-registered" : "initialized";
           console.error(`[mcp] Session ${label}: ${sid} (active: ${transports.size})`);
         },
@@ -178,6 +206,7 @@ const mcpHandler = async (req: Request, res: Response): Promise<void> => {
         const sid = transport.sessionId;
         if (sid) {
           transports.delete(sid);
+          lastSeen.delete(sid);
           console.error(`[mcp] Session closed: ${sid} (active: ${transports.size})`);
         }
       };
