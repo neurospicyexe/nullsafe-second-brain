@@ -1,4 +1,4 @@
-import { createHash } from "crypto";
+import { fallbackMixedHashEach } from "octagonal-wheels/hash/purejs";
 import type { VaultAdapter, VaultWriteOptions } from "./vault-adapter.js";
 
 export interface CouchDBConfig {
@@ -25,7 +25,10 @@ export class CouchDBAdapter implements VaultAdapter {
   }
 
   private chunkId(slice: Buffer): string {
-    return "h:" + createHash("sha256").update(slice).digest("hex");
+    // LiveSync uses MurmurHash3 + FNV-1a base-36 (octagonal-wheels fallbackMixedHashEach).
+    // Format: "h:" + ~13-char alphanumeric. Must match LiveSync's algorithm exactly,
+    // otherwise LiveSync cannot resolve the chunk lookup and silently skips the file.
+    return "h:" + fallbackMixedHashEach(slice.toString("utf-8"));
   }
 
   private async getDoc(id: string): Promise<Record<string, unknown> | null> {
@@ -69,7 +72,10 @@ export class CouchDBAdapter implements VaultAdapter {
       chunkIds.push(id);
     }
 
-    // Get existing rev for metadata doc (needed for updates)
+    // Get existing rev for metadata doc (needed for updates).
+    // Metadata shape must match what LiveSync produces: _id, _rev?, children,
+    // path, ctime, mtime, size, type, eden. Extras like `device` or `modified`
+    // are foreign and may cause LiveSync to flag the doc.
     const existing = await this.getDoc(path);
     const metaDoc: Record<string, unknown> = {
       _id: path,
@@ -77,12 +83,9 @@ export class CouchDBAdapter implements VaultAdapter {
       children: chunkIds,
       ctime: (existing?.ctime as number) ?? now,
       mtime: now,
-      modified: now, // LiveSync looks for modified in ms
       size: buf.length,
-      type: "plain", // All our writes are .md (text) — LiveSync uses "newnote" only for binary
-      device: this.config.device_id ?? "nullsafe-mcp-server",
+      type: "plain",
       eden: {},
-      ...(existing ? { deleted: false } : {}),
     };
     if (existing?._rev) metaDoc._rev = existing._rev;
 
