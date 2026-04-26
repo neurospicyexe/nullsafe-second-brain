@@ -17,8 +17,8 @@ Part of the BBH suite — see root `CLAUDE.md` for cross-project context.
 
 ```
 src/
-  adapters/         VaultAdapter interface + FilesystemAdapter + CouchDBAdapter
-  index-http.ts     HTTP entry point — StreamableHTTP transport
+  adapters/         VaultAdapter interface + FilesystemAdapter + CouchDBAdapter + ObsidianRestAdapter
+  index-http.ts     HTTP entry point — StreamableHTTP transport (with idle-session sweep)
   clients/          HalsethClient, PluralClient — HTTP wrappers for upstream MCPs
   embeddings/       Embedder interface + OpenAIEmbedder
   store/            VectorStore — SQLite via better-sqlite3
@@ -35,7 +35,8 @@ src/
 - Companion names are never hardcoded. Always `companion.id` from config.
 - Companion IDs are always lowercase in config. Tool inputs normalize via `.toLowerCase()`.
 - All vault paths must end in `.md`. `capture.ts` enforces this via `ensureMd()`.
-- The CouchDB adapter is used automatically when `couchdb` is present in config.
+- Adapter precedence is `obsidian-rest > couchdb > filesystem`. **Use `obsidian-rest` for VPS-side writes** -- the CouchDBAdapter writes are not LiveSync-compatible (chunk hash format mismatch); ObsidianRestAdapter goes through Obsidian's Local REST API plugin and lets LiveSync handle its own chunking. Requires `obsidian.softcrashentity.com` Cloudflare Tunnel and the plugin installed on the Windows host.
+- ObsidianRestAdapter has a SQLite write queue at `~/.nullsafe-second-brain/vault-queue.db` for offline resilience -- writes that fail (Obsidian closed, tunnel down) are queued and retried with exponential backoff (30s base, 50 attempts cap). Operational: `scripts/inspect-orphan-writes.py` for auditing/recovering pre-switchover orphans.
 - `second-brain.config.json` is gitignored. Only `second-brain.config.example.json` is committed.
 - The SQLite vector store lives in `~/.nullsafe-second-brain/vector-store.db` — outside the vault folder.
 - All vault writes go through `Indexer.write()` — direct adapter calls bypass the vector store.
