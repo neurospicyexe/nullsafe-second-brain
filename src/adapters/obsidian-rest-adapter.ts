@@ -60,14 +60,11 @@ export class ObsidianRestAdapter implements VaultAdapter {
     if (!overwrite && (await this.exists(path))) return;
     try {
       await this.putFile(path, content);
-      // Success — clear any prior queue entry for this path
       this.queue.prepare("DELETE FROM pending_writes WHERE path = ?").run(path);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      this.enqueue(path, content, message);
-      // Don't throw — caller should treat queued writes as accepted-with-deferral.
-      // Loud log so this doesn't go silent.
-      console.error(`[obsidian-rest] write failed, queued: ${path} (${message})`);
+      const detail = describeError(err);
+      this.enqueue(path, content, detail);
+      console.error(`[obsidian-rest] write failed, queued: ${path} | ${detail}`);
     }
   }
 
@@ -184,7 +181,7 @@ export class ObsidianRestAdapter implements VaultAdapter {
         console.log(`[obsidian-rest] queued write delivered: ${row.path}`);
       } catch (err) {
         const attempts = row.attempts + 1;
-        const message = err instanceof Error ? err.message : String(err);
+        const message = describeError(err);
         if (attempts >= this.maxAttempts) {
           console.error(`[obsidian-rest] giving up on ${row.path} after ${attempts} attempts: ${message}`);
           this.queue.prepare("DELETE FROM pending_writes WHERE id = ?").run(row.id);
@@ -205,4 +202,17 @@ export class ObsidianRestAdapter implements VaultAdapter {
 /** Encode a vault-relative path for the URL. Preserves slashes; encodes spaces and special chars. */
 function encodeVaultPath(path: string): string {
   return path.split("/").map(encodeURIComponent).join("/");
+}
+
+/** Walk an error chain (Node fetch wraps the real cause). Returns "msg | cause: msg | code: X". */
+function describeError(err: unknown): string {
+  if (!(err instanceof Error)) return String(err);
+  const parts = [err.message];
+  let cur: unknown = err.cause;
+  while (cur instanceof Error) {
+    parts.push(`cause: ${cur.message}`);
+    if ((cur as NodeJS.ErrnoException).code) parts.push(`code: ${(cur as NodeJS.ErrnoException).code}`);
+    cur = (cur as Error & { cause?: unknown }).cause;
+  }
+  return parts.join(" | ");
 }
