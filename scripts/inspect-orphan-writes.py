@@ -107,6 +107,8 @@ def put_to_obsidian(path, content, url, key):
         headers={
             "Authorization": f"Bearer {key}",
             "Content-Type": "text/markdown",
+            # Cloudflare blocks Python-urllib's default UA. Use a generic one.
+            "User-Agent": "nullsafe-second-brain-recovery/1.0",
         },
     )
     try:
