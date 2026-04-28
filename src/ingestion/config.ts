@@ -30,5 +30,7 @@ export function loadIngestionConfig(): IngestionConfig {
     sitPromptCronSchedule: process.env.SIT_PROMPT_CRON ?? '0 */12 * * *',
     patternSynthCronSchedule: process.env.PATTERN_SYNTH_CRON ?? '0 2 * * 0',
     personaFeederCronSchedule: process.env.PERSONA_FEEDER_CRON ?? '30 */6 * * *',
+    corpusIntakeDir: process.env.CORPUS_INTAKE_DIR,
+    corpusCronSchedule: process.env.CORPUS_CRON ?? '0 */6 * * *',
   }
 }

@@ -15,6 +15,21 @@ export interface CorpusOptions {
   force?: boolean  // if true, delete existing chunks and re-index
 }
 
+// Recursive walk: collect every .md file under dir (any depth).
+// Before this, processCorpus only read the top-level directory and silently skipped subfolders.
+function listMdFilesRecursive(dir: string): string[] {
+  const out: string[] = []
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name)
+    if (entry.isDirectory()) {
+      out.push(...listMdFilesRecursive(full))
+    } else if (entry.isFile() && entry.name.endsWith('.md')) {
+      out.push(full)
+    }
+  }
+  return out
+}
+
 export async function withConcurrencyLimit<T>(
   items: T[],
   limit: number,
@@ -38,9 +53,7 @@ export async function processCorpus(
   store: VectorStore,
   embedder: OpenAIEmbedder
 ): Promise<void> {
-  const files = fs.readdirSync(options.intakeDir)
-    .filter(f => f.endsWith('.md'))
-    .map(f => path.join(options.intakeDir, f))
+  const files = listMdFilesRecursive(options.intakeDir)
 
   console.log(`[corpus] processing ${files.length} files from ${options.intakeDir}`)
 
@@ -116,6 +129,7 @@ export async function processCorpus(
             vault_path: vaultPath,
             chunk_text: prefixedText,
             prefixed_text: prefixedText,
+            chunk_index: i,
             embedding,
             companion: null,
             content_type: options.sourceType,

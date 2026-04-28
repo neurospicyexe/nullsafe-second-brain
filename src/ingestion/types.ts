@@ -42,4 +42,6 @@ export interface IngestionConfig {
   sitPromptCronSchedule: string      // default: '0 */12 * * *' (twice daily)
   patternSynthCronSchedule: string   // default: '0 2 * * 0' (Sunday 2am)
   personaFeederCronSchedule: string  // default: '30 */6 * * *' (30min before evaluator)
+  corpusIntakeDir?: string           // optional: folder of .md files for recurring corpus backfill (recursive)
+  corpusCronSchedule?: string        // default: '0 */6 * * *' (every 6h); only fires if corpusIntakeDir is set
 }

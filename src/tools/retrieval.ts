@@ -55,23 +55,30 @@ export function buildRetrievalTools(store: VectorStore, embedder: Embedder) {
       return { chunks: [...fmt(pool1, 1), ...fmt(pool2, 2), ...fmt(pool3, 3)] };
     },
 
-    async sb_file_chunks(args: { filename: string; limit?: number }) {
+    async sb_file_chunks(args: { filename: string; limit?: number; offset?: number }) {
       const limit = args.limit ?? 100;
+      const offset = args.offset ?? 0;
       const search = args.filename.trim();
-      // Try exact path first, then prefix match on rag/ paths, then LIKE anywhere
-      let chunks = store.filterByPathPrefix(`rag/historical_corpus/${search}/`, limit);
+      // Fetch the full file (cap at 1000) for accurate total_chunks + JS-side slicing.
+      // Slicing in JS lets callers paginate via offset/limit even when limit < total.
+      const fetchCap = 1000;
+      let chunks = store.filterByPathPrefix(`rag/historical_corpus/${search}/`, fetchCap);
       if (chunks.length === 0) {
-        chunks = store.filterByPathPrefix(`rag/historical_corpus/${search}`, limit);
+        chunks = store.filterByPathPrefix(`rag/historical_corpus/${search}`, fetchCap);
       }
       if (chunks.length === 0) {
         // Broader search: filename appears anywhere in vault_path
-        chunks = store.filterByPathContains(search, limit);
+        chunks = store.filterByPathContains(search, fetchCap);
       }
+      const totalChunks = chunks.length;
+      const sliced = chunks.slice(offset, offset + limit);
       return {
         file: search,
-        total_chunks: chunks.length,
-        chunks: chunks.map((c, i) => ({
-          index: i,
+        total_chunks: totalChunks,
+        offset,
+        returned: sliced.length,
+        chunks: sliced.map((c) => ({
+          index: c.chunk_index ?? 0,
           vault_path: c.vault_path,
           text: c.chunk_text ?? c.prefixed_text ?? "",
         })),
