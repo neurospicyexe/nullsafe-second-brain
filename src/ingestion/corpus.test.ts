@@ -45,6 +45,11 @@ const mockConfig: IngestionConfig = {
   personaFeederCronSchedule: '30 */6 * * *',
 }
 
+// Match the shape readdirSync returns when called with { withFileTypes: true }.
+function dirent(name: string, isDir = false) {
+  return { name, isDirectory: () => isDir, isFile: () => !isDir }
+}
+
 function makeMockStore(existsByPathResult = false) {
   return {
     existsByPath: vi.fn().mockReturnValue(existsByPathResult),
@@ -94,7 +99,7 @@ describe('withConcurrencyLimit', () => {
 
 describe('processCorpus', () => {
   it('skips already-indexed files (existsByPath returns true)', async () => {
-    mockReaddirSync.mockReturnValue(['convo1.md'])
+    mockReaddirSync.mockReturnValue([dirent('convo1.md')])
     mockReadFileSync.mockReturnValue('Some markdown content')
     mockSemanticChunk.mockResolvedValue([
       { label: 'Opening', content: 'First chunk.' },
@@ -118,7 +123,7 @@ describe('processCorpus', () => {
   })
 
   it('calls semanticChunk, wrapChunk, embedder.embed, store.insert for new files', async () => {
-    mockReaddirSync.mockReturnValue(['convo1.md'])
+    mockReaddirSync.mockReturnValue([dirent('convo1.md')])
     mockReadFileSync.mockReturnValue('Some markdown content')
 
     const chunks = [
@@ -148,6 +153,7 @@ describe('processCorpus', () => {
       vault_path: 'rag/historical_corpus/convo1.md/0',
       chunk_text: prefixed0,
       prefixed_text: prefixed0,
+      chunk_index: 0,
       embedding: [0.1, 0.2],
       companion: null,
       content_type: 'historical_corpus',
@@ -157,6 +163,7 @@ describe('processCorpus', () => {
       vault_path: 'rag/historical_corpus/convo1.md/1',
       chunk_text: prefixed0,
       prefixed_text: prefixed0,
+      chunk_index: 1,
       embedding: [0.1, 0.2],
       companion: null,
       content_type: 'historical_corpus',
@@ -165,7 +172,7 @@ describe('processCorpus', () => {
   })
 
   it('skips unreadable files and continues to next', async () => {
-    mockReaddirSync.mockReturnValue(['bad.md', 'good.md'])
+    mockReaddirSync.mockReturnValue([dirent('bad.md'), dirent('good.md')])
     mockReadFileSync
       .mockImplementationOnce(() => { throw new Error('ENOENT') })
       .mockReturnValueOnce('Good content')
@@ -188,7 +195,7 @@ describe('processCorpus', () => {
   })
 
   it('skips files that fail chunking and continues to next', async () => {
-    mockReaddirSync.mockReturnValue(['fail.md', 'ok.md'])
+    mockReaddirSync.mockReturnValue([dirent('fail.md'), dirent('ok.md')])
     mockReadFileSync.mockReturnValue('Some content')
     mockSemanticChunk
       .mockRejectedValueOnce(new Error('DeepSeek timeout'))
@@ -209,7 +216,7 @@ describe('processCorpus', () => {
   })
 
   it('ignores non-.md files in the directory', async () => {
-    mockReaddirSync.mockReturnValue(['convo.md', 'notes.txt', 'image.png'])
+    mockReaddirSync.mockReturnValue([dirent('convo.md'), dirent('notes.txt'), dirent('image.png')])
     mockReadFileSync.mockReturnValue('Markdown content')
     mockSemanticChunk.mockResolvedValue([{ label: 'A', content: 'chunk' }])
     mockWrapChunk.mockResolvedValue('wrapped')

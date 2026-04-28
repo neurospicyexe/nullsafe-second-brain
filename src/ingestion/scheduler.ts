@@ -8,6 +8,7 @@ import { runDriftEvaluation } from './evaluator.js'
 import { runSitPrompts } from './sit-prompts.js'
 import { runPatternSynthesis, runSignalAudit } from './pattern-synthesizer.js'
 import { runPersonaFeeder } from './persona-feeder.js'
+import { processCorpus } from './corpus.js'
 import { cronHealth } from './cron-health.js'
 
 export function startIngestionScheduler(
@@ -166,6 +167,41 @@ export function startIngestionScheduler(
       cronHealth.fail('signal_audit', msg)
     }
   })
+
+  // Corpus intake: optional, every 6h by default (configurable via CORPUS_CRON).
+  // Only registered if CORPUS_INTAKE_DIR is set. Walks the folder recursively, indexes
+  // every .md file. Existing chunks are skipped (existsByPath check) so re-runs are
+  // idempotent and only new files get embedded -- safe to leave running indefinitely.
+  if (config.corpusIntakeDir) {
+    const corpusCron = config.corpusCronSchedule ?? '0 */6 * * *'
+    console.log(`[ingestion] corpus cron: ${corpusCron}, dir: ${config.corpusIntakeDir}`)
+    cronHealth.register('corpus_intake', 6 * 60 * 60 * 1000)
+    let corpusRunning = false
+    cron.schedule(corpusCron, async () => {
+      if (corpusRunning) {
+        console.warn('[ingestion] corpus still running from previous tick, skipping')
+        return
+      }
+      corpusRunning = true
+      console.log('[ingestion] corpus tick: running corpus intake')
+      cronHealth.start('corpus_intake')
+      try {
+        await processCorpus(
+          { intakeDir: config.corpusIntakeDir!, sourceType: 'historical_corpus', force: false },
+          config,
+          store,
+          embedder,
+        )
+        cronHealth.complete('corpus_intake')
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        console.error(`[ingestion] corpus error: ${msg}`)
+        cronHealth.fail('corpus_intake', msg)
+      } finally {
+        corpusRunning = false
+      }
+    })
+  }
 
   // Stale detection: check every hour, log STALE warnings for overdue jobs.
   cron.schedule('0 * * * *', () => cronHealth.checkStale())
