@@ -44,4 +44,6 @@ export interface IngestionConfig {
   personaFeederCronSchedule: string  // default: '30 */6 * * *' (30min before evaluator)
   corpusIntakeDir?: string           // optional: folder of .md files for recurring corpus backfill (recursive)
   corpusCronSchedule?: string        // default: '0 */6 * * *' (every 6h); only fires if corpusIntakeDir is set
+  vaultMaterializerCronSchedule?: string  // default: '*/30 * * * *' (every 30m); pulls unmaterialized growth rows and writes .md files
+  thoughtformDetectorCronSchedule?: string // default: '0 3 * * *' (daily 3am UTC); POSTs /mind/growth/thoughtforms/detect
 }

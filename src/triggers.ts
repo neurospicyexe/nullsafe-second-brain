@@ -38,8 +38,17 @@ export async function setupTriggers(
   try {
     const { loadIngestionConfig } = await import('./ingestion/config.js')
     const { startIngestionScheduler } = await import('./ingestion/scheduler.js')
+    const { buildVaultAdapter } = await import('./ingestion/vault-materializer.js')
     const ingestionConfig = loadIngestionConfig()
-    startIngestionScheduler(ingestionConfig, store, embedder)
+    // Build a VaultAdapter from the same SecondBrainConfig the rest of the
+    // process uses, so the materializer writes through obsidian-rest in prod.
+    let vault
+    try {
+      vault = buildVaultAdapter(config)
+    } catch (e) {
+      console.warn('[ingestion] vault adapter could not be built; vault-materializer disabled:', e instanceof Error ? e.message : e)
+    }
+    startIngestionScheduler(ingestionConfig, store, embedder, vault)
   } catch (err) {
     console.warn('[ingestion] scheduler not started:', err instanceof Error ? err.message : err)
   }

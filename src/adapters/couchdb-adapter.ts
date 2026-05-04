@@ -115,21 +115,29 @@ export class CouchDBAdapter implements VaultAdapter {
 
   async list(dirPath = ""): Promise<string[]> {
     const prefix = dirPath ? (dirPath.endsWith("/") ? dirPath : dirPath + "/") : "";
-    // No include_docs -- chunk blobs (h: prefix) would be transferred and immediately discarded.
-    // Deleted/versioninfo filtering happens at read time; listing only needs names.
-    const res = await fetch(`${this.baseUrl}/_all_docs`, {
+    // include_docs=true so we can filter soft-deleted docs at list time.
+    // Without this, deleted files appear in the listing and callers' subsequent
+    // read() calls fail with "File not found", which is a worse UX than just
+    // not listing them. Bandwidth cost is bounded: chunk bodies (h: prefix)
+    // are stripped from the result before any per-row work happens, and the
+    // remaining metadata docs are small (children id list + a few fields).
+    const res = await fetch(`${this.baseUrl}/_all_docs?include_docs=true`, {
       signal: AbortSignal.timeout(30_000),
       headers: this.headers(),
     });
     if (!res.ok) throw new Error(`CouchDB _all_docs failed: ${res.status}`);
-    const result = await res.json() as { rows: Array<{ id: string }> };
+    const result = await res.json() as {
+      rows: Array<{ id: string; doc?: { deleted?: boolean; type?: string } }>;
+    };
     return result.rows
-      .filter(r =>
-        !r.id.startsWith("h:") &&
-        !r.id.startsWith("_") &&
-        r.id !== "obsydian_livesync_version" &&
-        (prefix === "" || r.id.startsWith(prefix))
-      )
+      .filter(r => {
+        if (r.id.startsWith("h:")) return false;            // chunk doc
+        if (r.id.startsWith("_")) return false;             // CouchDB internal (_design, _local)
+        if (r.id === "obsydian_livesync_version") return false;
+        if (r.doc?.deleted === true) return false;          // soft-deleted file
+        if (prefix !== "" && !r.id.startsWith(prefix)) return false;
+        return true;
+      })
       .map(r => r.id);
   }
 
