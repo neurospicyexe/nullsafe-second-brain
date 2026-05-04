@@ -32,5 +32,7 @@ export function loadIngestionConfig(): IngestionConfig {
     personaFeederCronSchedule: process.env.PERSONA_FEEDER_CRON ?? '30 */6 * * *',
     corpusIntakeDir: process.env.CORPUS_INTAKE_DIR,
     corpusCronSchedule: process.env.CORPUS_CRON ?? '0 */6 * * *',
+    vaultMaterializerCronSchedule: process.env.VAULT_MATERIALIZER_CRON ?? '*/30 * * * *',
+    thoughtformDetectorCronSchedule: process.env.THOUGHTFORM_CRON ?? '0 3 * * *',
   }
 }

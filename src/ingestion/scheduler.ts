@@ -2,19 +2,30 @@ import cron from 'node-cron'
 import type { IngestionConfig } from './types.js'
 import type { VectorStore } from '../store/vector-store.js'
 import type { OpenAIEmbedder } from '../embeddings/openai-embedder.js'
+import type { VaultAdapter } from '../adapters/vault-adapter.js'
 import { createPipeline } from './pipeline.js'
 import { runGapDetector } from './gap-detector.js'
 import { runDriftEvaluation } from './evaluator.js'
 import { runSitPrompts } from './sit-prompts.js'
-import { runPatternSynthesis, runSignalAudit } from './pattern-synthesizer.js'
 import { runPersonaFeeder } from './persona-feeder.js'
 import { processCorpus } from './corpus.js'
+import { runVaultMaterializer } from './vault-materializer.js'
 import { cronHealth } from './cron-health.js'
+
+// NOTE: pattern-synthesizer.ts (runPatternSynthesis / runSignalAudit) is
+// retired as of migration 0062. The autonomous worker now writes structured
+// patterns directly to growth_patterns via the new evidence/prehension
+// prompt + Jaccard-similarity UPSERT. The legacy weekly synthesis wrote
+// unstructured text to companion_journal tagged [pattern_synthesis] and
+// duplicated the new path. The file is kept for reference but the cron is
+// not registered. To re-enable for a one-shot run: call runPatternSynthesis
+// directly from a script, not from this scheduler.
 
 export function startIngestionScheduler(
   config: IngestionConfig,
   store: VectorStore,
-  embedder: OpenAIEmbedder
+  embedder: OpenAIEmbedder,
+  vault?: VaultAdapter,
 ): void {
   const pipeline = createPipeline(config, store, embedder)
 
@@ -22,9 +33,9 @@ export function startIngestionScheduler(
   cronHealth.register('ingestion_pipeline', 20 * 60 * 1000)
   cronHealth.register('drift_evaluator', 6 * 60 * 60 * 1000)
   cronHealth.register('sit_prompts', 12 * 60 * 60 * 1000)
-  cronHealth.register('pattern_synth', 7 * 24 * 60 * 60 * 1000)
-  cronHealth.register('signal_audit',  7 * 24 * 60 * 60 * 1000)
   cronHealth.register('persona_feeder', 6 * 60 * 60 * 1000)
+  if (vault) cronHealth.register('vault_materializer', 30 * 60 * 1000)
+  cronHealth.register('thoughtform_detector', 24 * 60 * 60 * 1000)
 
   console.log(`[ingestion] scheduler starting, cron: ${config.cronSchedule}`)
 
@@ -33,7 +44,8 @@ export function startIngestionScheduler(
   let evaluatorRunning = false
   let sitPromptsRunning = false
   let personaFeederRunning = false
-  let patternSynthRunning = false
+  let materializerRunning = false
+  let thoughtformRunning = false
 
   cron.schedule(config.cronSchedule, async () => {
     if (pipelineRunning) {
@@ -134,37 +146,77 @@ export function startIngestionScheduler(
     }
   })
 
-  // Pattern synthesis: runs weekly (default: Sunday 2am, configurable via PATTERN_SYNTH_CRON).
-  // Pulls last 30d of companion writes, identifies recurring patterns via DeepSeek,
-  // writes synthesis back to companion_journal tagged [pattern_synthesis].
-  console.log(`[ingestion] pattern-synth cron: ${config.patternSynthCronSchedule}`)
-  cron.schedule(config.patternSynthCronSchedule, async () => {
-    if (patternSynthRunning) {
-      console.warn('[ingestion] pattern-synth still running from previous tick, skipping')
+  // Vault materializer: every 30 min by default (VAULT_MATERIALIZER_CRON).
+  // Pulls /mind/growth/unmaterialized/<companion> for cypher/drevan/gaia,
+  // writes structured .md files into the Obsidian vault under
+  // Companions/<id>/growth/{journal,patterns,markers}/, then PATCHes
+  // vault_path back to Halseth so the row no longer appears in subsequent
+  // unmaterialized fetches. Only runs if a vault adapter was passed in.
+  if (vault) {
+    const vaultCron = config.vaultMaterializerCronSchedule ?? '*/30 * * * *'
+    console.log(`[ingestion] vault-materializer cron: ${vaultCron}`)
+    cron.schedule(vaultCron, async () => {
+      if (materializerRunning) {
+        console.warn('[ingestion] vault-materializer still running from previous tick, skipping')
+        return
+      }
+      materializerRunning = true
+      console.log('[ingestion] vault-materializer tick: writing growth rows to vault')
+      cronHealth.start('vault_materializer')
+      try {
+        const stats = await runVaultMaterializer(config, vault)
+        cronHealth.complete('vault_materializer')
+        console.log(`[ingestion] vault-materializer done: ${stats.written} written, ${stats.failed} failed`)
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        console.error(`[ingestion] vault-materializer error: ${msg}`)
+        cronHealth.fail('vault_materializer', msg)
+      } finally {
+        materializerRunning = false
+      }
+    })
+  } else {
+    console.log('[ingestion] vault-materializer NOT registered (no VaultAdapter passed to startIngestionScheduler)')
+  }
+
+  // Thoughtform detector: daily at 3am UTC (THOUGHTFORM_CRON).
+  // POSTs /mind/growth/thoughtforms/detect on Halseth which walks recent
+  // patterns across all three companions, finds Jaccard >= 0.6 cross-companion
+  // clusters, and writes a 'thoughtform' marker on each participating
+  // companion. The vault-materializer picks those up on its next tick.
+  // Idempotent at the Halseth side (description-dedupe).
+  const thoughtformCron = config.thoughtformDetectorCronSchedule ?? '0 3 * * *'
+  console.log(`[ingestion] thoughtform-detector cron: ${thoughtformCron}`)
+  cron.schedule(thoughtformCron, async () => {
+    if (thoughtformRunning) {
+      console.warn('[ingestion] thoughtform-detector still running from previous tick, skipping')
       return
     }
-    patternSynthRunning = true
-    console.log('[ingestion] pattern-synth tick: running pattern synthesis')
-    cronHealth.start('pattern_synth')
+    thoughtformRunning = true
+    cronHealth.start('thoughtform_detector')
     try {
-      await runPatternSynthesis(config)
-      cronHealth.complete('pattern_synth')
+      const res = await fetch(`${config.halsethUrl}/mind/growth/thoughtforms/detect`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${config.halsethSecret}`,
+        },
+        body: '{}',
+        signal: AbortSignal.timeout(30_000),
+      })
+      if (!res.ok) {
+        const body = await res.text().catch(() => '')
+        throw new Error(`Halseth thoughtforms/detect ${res.status}: ${body.slice(0, 200)}`)
+      }
+      const data = await res.json() as { detected?: number; written?: number }
+      console.log(`[ingestion] thoughtform-detector: detected=${data.detected ?? 0} written=${data.written ?? 0}`)
+      cronHealth.complete('thoughtform_detector')
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      console.error(`[ingestion] pattern-synth error: ${msg}`)
-      cronHealth.fail('pattern_synth', msg)
+      console.error(`[ingestion] thoughtform-detector error: ${msg}`)
+      cronHealth.fail('thoughtform_detector', msg)
     } finally {
-      patternSynthRunning = false
-    }
-
-    cronHealth.start('signal_audit')
-    try {
-      await runSignalAudit(config)
-      cronHealth.complete('signal_audit')
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      console.error(`[ingestion] signal-audit error: ${msg}`)
-      cronHealth.fail('signal_audit', msg)
+      thoughtformRunning = false
     }
   })
 
