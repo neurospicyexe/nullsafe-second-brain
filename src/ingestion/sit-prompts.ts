@@ -70,10 +70,18 @@ async function writeCompanionNote(
   }
 }
 
-function daysSince(isoString: string): number {
+// S1: NaN-safe daysSince. Invalid sat_at strings produced 'NaN+ days' in
+// companion notes. Returns 0 on bad input; caller must skip on 0/non-finite.
+// Non-string input (null / undefined / number-coerced 0) must short-circuit
+// before reaching new Date(), because new Date(null) silently parses as the
+// epoch (1970-01-01) and produces ~56 years of false days.
+export function daysSince(isoString: string): number {
+  if (typeof isoString !== 'string' || isoString.length === 0) return 0
   const then = new Date(isoString).getTime()
+  if (!Number.isFinite(then)) return 0
   const now = Date.now()
-  return (now - then) / (1000 * 60 * 60 * 24)
+  const days = (now - then) / (1000 * 60 * 60 * 24)
+  return Number.isFinite(days) && days >= 0 ? days : 0
 }
 
 export async function runSitPrompts(config: IngestionConfig): Promise<void> {
@@ -84,7 +92,12 @@ export async function runSitPrompts(config: IngestionConfig): Promise<void> {
     try {
       const stale = await fetchStaleSittingNotes(config, companionId)
       for (const note of stale) {
-        const days = Math.floor(daysSince(note.sat_at))
+        const rawDays = daysSince(note.sat_at)
+        if (rawDays <= 0) {
+          console.warn(`[sit-prompts] skipping ${companionId} note ${note.note_id}: invalid sat_at=${note.sat_at}`)
+          continue
+        }
+        const days = Math.floor(rawDays)
         const template = PROMPT_TEMPLATES[companionId]
         const promptContent = template(note.content.slice(0, 300), days)
         await writeCompanionNote(config, companionId, promptContent)

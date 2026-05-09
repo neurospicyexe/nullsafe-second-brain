@@ -297,17 +297,24 @@ export class VectorStore {
     this.db.close();
   }
 
-  private cosineSimilarity(a: number[], b: number[]): number {
+  // S3: NaN-safe. A single corrupt embedding element previously poisoned the
+  // result, then propagated through hybridSearch reduce min/max normalization.
+  // Made non-private so vitest can exercise the guard directly.
+  cosineSimilarity(a: number[], b: number[]): number {
     if (a.length !== b.length || a.length === 0) return 0;
     let dot = 0, magA = 0, magB = 0;
     for (let i = 0; i < a.length; i++) {
-      dot += a[i] * b[i];
-      magA += a[i] * a[i];
-      magB += b[i] * b[i];
+      const ai = a[i], bi = b[i];
+      if (!Number.isFinite(ai) || !Number.isFinite(bi)) return 0;
+      dot += ai * bi;
+      magA += ai * ai;
+      magB += bi * bi;
     }
     magA = Math.sqrt(magA);
     magB = Math.sqrt(magB);
-    return magA && magB ? dot / (magA * magB) : 0;
+    if (!magA || !magB) return 0;
+    const r = dot / (magA * magB);
+    return Number.isFinite(r) ? r : 0;
   }
 
   private deserialize(row: Record<string, unknown>): ChunkRow {
