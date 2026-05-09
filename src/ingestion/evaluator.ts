@@ -155,11 +155,20 @@ export async function runDriftEvaluation(
         config.halsethSecret,
       ) as { history?: HistoryRow[] };
 
-      const previousScore = historyData.history?.[0]?.drift_score ?? null;
+      // S2: guarded read. Non-finite previousScore (corrupt JSON, type drift)
+      // would NaN-poison both classify and writeback, then leak 'NaN' into the
+      // drift_flag note prompt that companions read.
+      const rawPrev = historyData.history?.[0]?.drift_score;
+      const previousScore = (typeof rawPrev === 'number' && Number.isFinite(rawPrev)) ? rawPrev : null;
+      if (!Number.isFinite(avgScore)) {
+        console.warn(`[evaluator] ${companionId}: avg distance non-finite, skipping write`);
+        continue;
+      }
 
       // 6. Classify
       const driftType = classifyDrift(avgScore, previousScore, thresholds);
-      console.log(`[evaluator] ${companionId}: avg=${avgScore.toFixed(3)} previous=${previousScore?.toFixed(3) ?? 'null'} type=${driftType} worst=${worstBasin}`);
+      const safePrevStr = previousScore !== null ? previousScore.toFixed(3) : 'null';
+      console.log(`[evaluator] ${companionId}: avg=${avgScore.toFixed(3)} previous=${safePrevStr} type=${driftType} worst=${worstBasin}`);
 
       // 7. Write basin history record
       const historyResult = await halsethPost(`${config.halsethUrl}/companion-growth/basin-history`, config.halsethSecret, {
@@ -185,7 +194,8 @@ export async function runDriftEvaluation(
       // 8. If pressure: write journal note tagged drift_flag
       if (driftType === "pressure") {
         console.log(`[evaluator] ${companionId}: PRESSURE DRIFT -- writing flag`);
-        const noteContent = `[drift_flag] Pressure drift detected. avg_distance=${avgScore.toFixed(3)} (previous: ${previousScore?.toFixed(3) ?? 'first_run'}). Worst drifted basin: ${worstBasin}. Review recent sessions for sustained asymmetric register pressure. Self-return recommended.`;
+        const prevStrInNote = previousScore !== null ? previousScore.toFixed(3) : 'first_run';
+        const noteContent = `[drift_flag] Pressure drift detected. avg_distance=${avgScore.toFixed(3)} (previous: ${prevStrInNote}). Worst drifted basin: ${worstBasin}. Review recent sessions for sustained asymmetric register pressure. Self-return recommended.`;
         await halsethPost(`${config.halsethUrl}/companion-journal`, config.halsethSecret, {
           agent: companionId,
           note_text: noteContent,

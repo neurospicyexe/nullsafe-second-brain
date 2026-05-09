@@ -354,8 +354,9 @@ app.post("/ingest/corpus-file", async (req: Request, res: Response): Promise<voi
       files: rawFiles.map(f => (f.filename as string).trim()),
     });
 
-    // Background processing — intentionally not awaited
-    (async () => {
+    // S4: Background processing — explicit .catch() so a top-level throw
+    // (outside the per-file try) doesn't escape as unhandledRejection.
+    void (async () => {
       for (const f of rawFiles) {
         const filename = (f.filename as string).trim();
         let chunksIndexed = 0;
@@ -409,7 +410,9 @@ app.post("/ingest/corpus-file", async (req: Request, res: Response): Promise<voi
         console.log(`[ingest/corpus-file] ${filename}: ${chunksIndexed} indexed, ${chunksSkipped} skipped`);
       }
       console.log(`[ingest/corpus-file] batch complete for ${rawFiles.length} files`);
-    })();
+    })().catch(err => {
+      console.error('[ingest/corpus-file] background batch crashed:', err);
+    });
   } catch (err) {
     console.error("[ingest/corpus-file] error:", err);
     if (!res.headersSent) res.status(500).json({ error: "internal error" });
@@ -433,17 +436,21 @@ app.post("/ingest/session", async (req: Request, res: Response): Promise<void> =
       return;
     }
 
-    // Respond immediately -- pipeline runs in background.
+    // S5: atomic check-and-set BEFORE responding so the mutex is acquired
+    // synchronously. Prior version did the check inside the async IIFE, leaving
+    // a race window where two concurrent webhooks could both grab "running=false"
+    // before either flipped it to true. Also wraps IIFE with .catch() so a top-level
+    // throw (outside the inner try/finally) can't escape as unhandledRejection
+    // and leaves the mutex permanently set.
+    if (sessionIngestRunning) {
+      console.warn(`[ingest/session] pipeline already running, skipping for companion=${companion_id} session=${session_id}`);
+      res.status(202).json({ message: "already running", companion_id, session_id });
+      return;
+    }
+    sessionIngestRunning = true;
     res.status(202).json({ message: "accepted", companion_id, session_id });
 
-    // Background: run full pipeline (HWM-based, idempotent -- only ingests new records).
-    // Guard against simultaneous runs from rapid session closes -- same pattern as the scheduler.
-    (async () => {
-      if (sessionIngestRunning) {
-        console.warn(`[ingest/session] pipeline already running, skipping for companion=${companion_id} session=${session_id}`);
-        return;
-      }
-      sessionIngestRunning = true;
+    void (async () => {
       console.log(`[ingest/session] webhook: companion=${companion_id} session=${session_id}`);
       try {
         if (!ingestionConfig) {
@@ -458,7 +465,10 @@ app.post("/ingest/session", async (req: Request, res: Response): Promise<void> =
       } finally {
         sessionIngestRunning = false;
       }
-    })();
+    })().catch(err => {
+      sessionIngestRunning = false;
+      console.error("[ingest/session] background crashed:", err);
+    });
   } catch (err) {
     console.error("[ingest/session] error:", err);
     if (!res.headersSent) res.status(500).json({ error: "internal error" });
