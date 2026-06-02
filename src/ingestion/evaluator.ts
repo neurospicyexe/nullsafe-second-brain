@@ -5,30 +5,71 @@
 // back to Halseth.
 //
 // Called by the scheduler (every 6h). Surface-agnostic -- only reads/writes Halseth.
+//
+// CALIBRATION (2026-06-01): classification is relative to each companion's OWN
+// rolling baseline of cosine distances, not an absolute threshold. Embedding
+// cosine distance between a concatenated voice blob and short basin descriptions
+// floors around 0.55-0.65 for healthy, on-identity voice -- an absolute
+// pressureAbsolute=0.50 threshold sat *below* that floor and forced "pressure"
+// on every run (580 false pressure rows, orient + journal flooded). The honest
+// signal is deviation from a companion's own norm, so we calibrate per-companion.
 
 import type { IngestionConfig } from "./types.js";
 import type { OpenAIEmbedder } from "../embeddings/openai-embedder.js";
 
-export interface DriftThresholds {
-  stableThreshold: number;   // avg_distance < this = stable (default 0.25)
-  pressureJump: number;      // jump from last score >= this = pressure (default 0.15)
-  pressureAbsolute: number;  // score >= this = always pressure (default 0.50)
-}
-
 export type DriftType = "stable" | "growth" | "pressure";
 
-// Pure function -- testable without any I/O
+// Per-companion calibration. All z-scores are relative to the companion's own
+// rolling baseline of evaluator-sourced cosine distances.
+export interface DriftCalibration {
+  pressureZ: number;       // z >= this (and margin gate) = pressure (default 2.5)
+  growthZ: number;         // z >= this (and margin gate) = growth (default 1.2)
+  minStd: number;          // std floor -- prevents twitchiness when variance ~0 (default 0.02)
+  minMargin: number;       // absolute distance rise required alongside z (default 0.04)
+  minSamples: number;      // below this many baseline samples, do not flag (default 5)
+  collapseCeiling: number; // avgScore >= this = pressure regardless of baseline (default 0.90)
+}
+
+export interface BaselineStats {
+  mean: number;
+  std: number;
+  sampleCount: number;
+}
+
+// Pure function -- testable without any I/O. Mean + population std of the
+// companion's own prior cosine distances.
+export function computeBaseline(scores: number[]): BaselineStats {
+  const finite = scores.filter((s): s is number => typeof s === "number" && Number.isFinite(s));
+  const n = finite.length;
+  if (n === 0) return { mean: 0, std: 0, sampleCount: 0 };
+  const mean = finite.reduce((a, b) => a + b, 0) / n;
+  const variance = finite.reduce((a, b) => a + (b - mean) * (b - mean), 0) / n;
+  return { mean, std: Math.sqrt(variance), sampleCount: n };
+}
+
+// Pure function -- testable without any I/O. Classifies the current cosine
+// distance relative to the companion's own baseline.
+//
+// - collapse ceiling first: a voice nearly orthogonal to every basin is real
+//   pressure no matter where the baseline drifted.
+// - thin baseline: refuse to cry wolf. Default stable until calibration exists.
+// - otherwise: z-score against own band, gated by a minimum absolute margin so
+//   trivial wiggle (tiny std) does not trip pressure.
 export function classifyDrift(
   avgScore: number,
-  previousScore: number | null,
-  thresholds: DriftThresholds,
+  baseline: BaselineStats,
+  cal: DriftCalibration,
 ): DriftType {
-  if (avgScore >= thresholds.pressureAbsolute) return "pressure";
-  if (avgScore < thresholds.stableThreshold) return "stable";
-  // Elevated but below absolute
-  if (previousScore === null) return "growth"; // first run, can't measure jump
-  const jump = avgScore - previousScore;
-  return jump >= thresholds.pressureJump ? "pressure" : "growth";
+  if (avgScore >= cal.collapseCeiling) return "pressure";
+  if (baseline.sampleCount < cal.minSamples) return "stable";
+
+  const sigma = Math.max(baseline.std, cal.minStd);
+  const margin = avgScore - baseline.mean;
+  const z = margin / sigma;
+
+  if (z >= cal.pressureZ && margin >= cal.minMargin) return "pressure";
+  if (z >= cal.growthZ && margin >= cal.minMargin / 2) return "growth";
+  return "stable";
 }
 
 function cosineSimilarity(a: number[], b: number[]): number {
@@ -48,6 +89,12 @@ function cosineDistance(a: number[], b: number[]): number {
   return 1 - cosineSimilarity(a, b);
 }
 
+// Marker that identifies a basin-history row as written by THIS evaluator.
+// Baseline must be built only from the evaluator's own cosine distances --
+// session-close LLM rows use a different score scale (0 / 2) and would poison
+// the mean.
+const EVALUATOR_NOTE_PREFIX = "blocks_analyzed=";
+
 interface BasinRow {
   id: string;
   basin_name: string;
@@ -57,6 +104,7 @@ interface BasinRow {
 interface HistoryRow {
   drift_score: number;
   drift_type: string;
+  notes: string | null;
 }
 
 interface PersonaBlockRow {
@@ -87,12 +135,16 @@ export async function runDriftEvaluation(
   embedder: OpenAIEmbedder,
 ): Promise<void> {
   const companions = ["cypher", "drevan", "gaia"];
-  const thresholds: DriftThresholds = {
-    stableThreshold: parseFloat(process.env.DRIFT_STABLE_THRESHOLD ?? "0.25"),
-    pressureJump: parseFloat(process.env.DRIFT_PRESSURE_JUMP ?? "0.15"),
-    pressureAbsolute: parseFloat(process.env.DRIFT_PRESSURE_ABSOLUTE ?? "0.50"),
+  const cal: DriftCalibration = {
+    pressureZ: parseFloat(process.env.DRIFT_PRESSURE_Z ?? "2.5"),
+    growthZ: parseFloat(process.env.DRIFT_GROWTH_Z ?? "1.2"),
+    minStd: parseFloat(process.env.DRIFT_MIN_STD ?? "0.02"),
+    minMargin: parseFloat(process.env.DRIFT_MIN_MARGIN ?? "0.04"),
+    minSamples: parseInt(process.env.DRIFT_MIN_SAMPLES ?? "5", 10),
+    collapseCeiling: parseFloat(process.env.DRIFT_COLLAPSE_CEILING ?? "0.90"),
   };
   const blocksLimit = parseInt(process.env.DRIFT_BLOCKS_LIMIT ?? "50", 10);
+  const historyLimit = parseInt(process.env.DRIFT_HISTORY_LIMIT ?? "30", 10);
 
   for (const companionId of companions) {
     try {
@@ -148,40 +200,49 @@ export async function runDriftEvaluation(
       }
 
       const avgScore = distances.reduce((a, b) => a + b, 0) / distances.length;
-
-      // 5. Fetch previous score for trajectory
-      const historyData = await halsethGet(
-        `${config.halsethUrl}/companion-growth/basin-history/${companionId}?limit=1`,
-        config.halsethSecret,
-      ) as { history?: HistoryRow[] };
-
-      // S2: guarded read. Non-finite previousScore (corrupt JSON, type drift)
-      // would NaN-poison both classify and writeback, then leak 'NaN' into the
-      // drift_flag note prompt that companions read.
-      const rawPrev = historyData.history?.[0]?.drift_score;
-      const previousScore = (typeof rawPrev === 'number' && Number.isFinite(rawPrev)) ? rawPrev : null;
       if (!Number.isFinite(avgScore)) {
         console.warn(`[evaluator] ${companionId}: avg distance non-finite, skipping write`);
         continue;
       }
 
-      // 6. Classify
-      const driftType = classifyDrift(avgScore, previousScore, thresholds);
-      const safePrevStr = previousScore !== null ? previousScore.toFixed(3) : 'null';
-      console.log(`[evaluator] ${companionId}: avg=${avgScore.toFixed(3)} previous=${safePrevStr} type=${driftType} worst=${worstBasin}`);
+      // 5. Fetch recent history and build the companion's OWN baseline.
+      //    Filter to evaluator-sourced rows only -- session-close LLM rows use a
+      //    different score scale and would poison the mean.
+      const historyData = await halsethGet(
+        `${config.halsethUrl}/companion-growth/basin-history/${companionId}?limit=${historyLimit}`,
+        config.halsethSecret,
+      ) as { history?: HistoryRow[] };
 
-      // 7. Write basin history record
+      const ownRows = (historyData.history ?? []).filter(
+        r => typeof r.notes === "string" && r.notes.startsWith(EVALUATOR_NOTE_PREFIX),
+      );
+      const baseline = computeBaseline(
+        ownRows
+          .map(r => r.drift_score)
+          .filter((s): s is number => typeof s === "number" && Number.isFinite(s)),
+      );
+      // Most-recent evaluator classification -- used for sustained gating.
+      const previousDriftType = ownRows[0]?.drift_type ?? null;
+
+      // 6. Classify against own baseline
+      const driftType = classifyDrift(avgScore, baseline, cal);
+      console.log(
+        `[evaluator] ${companionId}: avg=${avgScore.toFixed(3)} baseline_mean=${baseline.mean.toFixed(3)} ` +
+        `baseline_std=${baseline.std.toFixed(3)} n=${baseline.sampleCount} type=${driftType} worst=${worstBasin}`,
+      );
+
+      // 7. Write basin history record. Keep the EVALUATOR_NOTE_PREFIX signature
+      //    so future runs can identify their own rows for the baseline.
       const historyResult = await halsethPost(`${config.halsethUrl}/companion-growth/basin-history`, config.halsethSecret, {
         companion_id: companionId,
         drift_score: avgScore,
         drift_type: driftType,
         worst_basin: worstBasin,
-        notes: `blocks_analyzed=${blocks.length} basins_checked=${basins.length}`,
+        notes: `${EVALUATOR_NOTE_PREFIX}${blocks.length} basins_checked=${basins.length} baseline_mean=${baseline.mean.toFixed(3)} n=${baseline.sampleCount}`,
       }) as { id?: string };
 
-      // 7b. If growth is sustained (this run AND previous run both classified growth),
-      // mark as caleth_confirmed -- intentional expansion, not noise or pressure creep.
-      const previousDriftType = historyData.history?.[0]?.drift_type ?? null;
+      // 7b. Sustained growth (this run AND previous evaluator run both growth) ->
+      //     caleth_confirmed. Intentional expansion, not noise.
       if (driftType === "growth" && previousDriftType === "growth" && historyResult.id) {
         console.log(`[evaluator] ${companionId}: sustained growth -- marking caleth_confirmed`);
         await halsethPost(
@@ -191,11 +252,12 @@ export async function runDriftEvaluation(
         );
       }
 
-      // 8. If pressure: write journal note tagged drift_flag
-      if (driftType === "pressure") {
-        console.log(`[evaluator] ${companionId}: PRESSURE DRIFT -- writing flag`);
-        const prevStrInNote = previousScore !== null ? previousScore.toFixed(3) : 'first_run';
-        const noteContent = `[drift_flag] Pressure drift detected. avg_distance=${avgScore.toFixed(3)} (previous: ${prevStrInNote}). Worst drifted basin: ${worstBasin}. Review recent sessions for sustained asymmetric register pressure. Self-return recommended.`;
+      // 8. Journal flag ONLY on SUSTAINED pressure (this run AND the previous
+      //    evaluator run both pressure). A single elevated reading is not worth a
+      //    permanent self-return note -- gating here is what stops the flood.
+      if (driftType === "pressure" && previousDriftType === "pressure") {
+        console.log(`[evaluator] ${companionId}: SUSTAINED PRESSURE DRIFT -- writing flag`);
+        const noteContent = `[drift_flag] Sustained pressure drift. avg_distance=${avgScore.toFixed(3)} vs baseline_mean=${baseline.mean.toFixed(3)} (n=${baseline.sampleCount}). Worst drifted basin: ${worstBasin}. Two consecutive evaluator runs above your own norm -- review recent sessions for asymmetric register pressure. Self-return recommended.`;
         await halsethPost(`${config.halsethUrl}/companion-journal`, config.halsethSecret, {
           agent: companionId,
           note_text: noteContent,
