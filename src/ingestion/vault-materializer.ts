@@ -59,6 +59,9 @@ interface UnmaterializedResponse {
   journal:  UnmaterializedJournal[];
   patterns: UnmaterializedPattern[];
   markers:  UnmaterializedMarker[];
+  // Journal rows that carry a vault_path but are no longer canon (pending or
+  // declined). Their .md files must be removed from the vault.
+  orphaned: Array<{ id: string; vault_path: string }>;
 }
 
 interface Evidence {
@@ -152,15 +155,35 @@ export async function runVaultMaterializer(
   // entry that's also being materialized in this tick).
   type Item = { companionId: CompanionId; kind: "journal" | "patterns" | "markers"; row: any; targetPath: string };
   const allItems: Item[] = [];
+  const orphanedItems: Array<{ companionId: CompanionId; id: string; vaultPath: string }> = [];
   for (const companionId of COMPANIONS) {
     try {
       const data = await fetchUnmaterialized(ingestionConfig, companionId);
       for (const r of data.journal)  allItems.push({ companionId, kind: "journal",  row: r, targetPath: computeJournalPath(companionId, r) });
       for (const r of data.patterns) allItems.push({ companionId, kind: "patterns", row: r, targetPath: computePatternPath(companionId, r) });
       for (const r of data.markers)  allItems.push({ companionId, kind: "markers",  row: r, targetPath: computeMarkerPath(companionId, r) });
+      for (const o of data.orphaned ?? []) orphanedItems.push({ companionId, id: o.id, vaultPath: o.vault_path });
     } catch (e) {
       console.error(`[vault-materializer] ${companionId} pull failed:`, e instanceof Error ? e.message : e);
     }
+  }
+
+  // Un-materialize orphans first: rows written to the vault that are no longer
+  // canon (pending or declined). Delete the file, THEN clear vault_path -- if the
+  // clear fails it just retries next tick rather than leaving a row pointing at a
+  // deleted file. Keeps the vault holding only ratified growth. Runs even when
+  // there is nothing new to materialize.
+  let totalCleaned = 0;
+  for (const o of orphanedItems) {
+    try {
+      await vault.delete(o.vaultPath);
+      if (await clearVaultPath(ingestionConfig, "journal", o.id)) totalCleaned++;
+    } catch (e) {
+      console.warn(`[vault-materializer] orphan cleanup ${o.companionId}/${o.id} failed:`, e instanceof Error ? e.message : e);
+    }
+  }
+  if (orphanedItems.length > 0) {
+    console.log(`[vault-materializer] orphan cleanup: ${totalCleaned}/${orphanedItems.length} un-materialized (file deleted + vault_path cleared)`);
   }
 
   if (allItems.length === 0) {
@@ -289,6 +312,37 @@ async function patchVaultPath(
     return true;
   } catch (e) {
     console.warn(`[vault-materializer] PATCH vault_path threw ${kind}/${id}:`, e instanceof Error ? e.message : e);
+    return false;
+  }
+}
+
+// Clear vault_path back to NULL (un-materialization). PATCH with vault_path:null.
+async function clearVaultPath(
+  config: IngestionConfig,
+  kind: "journal" | "patterns" | "markers",
+  id: string,
+): Promise<boolean> {
+  try {
+    const res = await fetch(
+      `${config.halsethUrl}/mind/growth/${kind}/${encodeURIComponent(id)}/vault`,
+      {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${config.halsethSecret}`,
+        },
+        body: JSON.stringify({ vault_path: null }),
+        signal: AbortSignal.timeout(10_000),
+      },
+    );
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      console.warn(`[vault-materializer] clear vault_path failed ${kind}/${id}: ${res.status} ${text.slice(0, 100)}`);
+      return false;
+    }
+    return true;
+  } catch (e) {
+    console.warn(`[vault-materializer] clear vault_path threw ${kind}/${id}:`, e instanceof Error ? e.message : e);
     return false;
   }
 }

@@ -28,16 +28,18 @@ interface CapturedWrite {
   content: string;
 }
 
-function makeMockVault(): { adapter: VaultAdapter; writes: CapturedWrite[] } {
+function makeMockVault(): { adapter: VaultAdapter; writes: CapturedWrite[]; deletes: string[] } {
   const writes: CapturedWrite[] = [];
+  const deletes: string[] = [];
   const adapter: VaultAdapter = {
     write: async ({ path, content }) => { writes.push({ path, content }); },
     read: async () => "",
     exists: async () => false,
     list: async () => [],
     move: async () => undefined,
+    delete: async (path: string) => { deletes.push(path); },
   };
-  return { adapter, writes };
+  return { adapter, writes, deletes };
 }
 
 beforeEach(() => {
@@ -157,6 +159,37 @@ describe("runVaultMaterializer", () => {
     expect(vpBody.ids).toContain("p-drevan");
     expect(vpBody.ids).not.toContain("j1");
     expect(vpBody.ids).not.toContain("p1");
+  });
+
+  it("un-materializes orphaned rows: deletes the vault file and clears vault_path", async () => {
+    const { adapter, deletes } = makeMockVault();
+    const config = makeConfig();
+    const fetchMock = vi.fn(async (url: string, init?: any) => {
+      if (url.endsWith("/mind/growth/unmaterialized/cypher?limit=100")) {
+        return new Response(JSON.stringify({
+          journal: [], patterns: [], markers: [],
+          orphaned: [{ id: "orph-1", vault_path: "Companions/cypher/growth/journal/2026-06-01-declined.md" }],
+        }), { status: 200 });
+      }
+      if (url.includes("/mind/growth/unmaterialized/")) {
+        return new Response(JSON.stringify({ journal: [], patterns: [], markers: [], orphaned: [] }), { status: 200 });
+      }
+      if (url.includes("/mind/growth/") && init?.method === "PATCH") {
+        return new Response(JSON.stringify({ ok: true, vault_path: null }), { status: 200 });
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await runVaultMaterializer(config, adapter);
+
+    // The orphaned file was deleted from the vault.
+    expect(deletes).toContain("Companions/cypher/growth/journal/2026-06-01-declined.md");
+    // vault_path cleared via PATCH null on the journal row (delete-first, then clear).
+    const clearCalls = fetchMock.mock.calls.filter((c: any[]) =>
+      c[0].includes("/mind/growth/journal/orph-1/vault") && c[1]?.method === "PATCH");
+    expect(clearCalls.length).toBe(1);
+    expect(JSON.parse(clearCalls[0][1].body).vault_path).toBe(null);
   });
 
   it("does NOT call vault-paths when there are no cross-tick prehensions", async () => {

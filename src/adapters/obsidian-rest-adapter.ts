@@ -117,6 +117,20 @@ export class ObsidianRestAdapter implements VaultAdapter {
     }
   }
 
+  async delete(path: string): Promise<void> {
+    // Drop any queued write for this path first, so the retry loop can't
+    // resurrect the file after we delete it.
+    this.queue.prepare("DELETE FROM pending_writes WHERE path = ?").run(path);
+    const res = await fetch(`${this.base}/vault/${encodeVaultPath(path)}`, {
+      method: "DELETE",
+      headers: { Authorization: this.headers.Authorization },
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!res.ok && res.status !== 404) {
+      throw new Error(`Obsidian REST DELETE ${path} failed: ${res.status}`);
+    }
+  }
+
   /** Stop the background retry loop and close the queue DB. */
   close(): void {
     if (this.retryTimer) {

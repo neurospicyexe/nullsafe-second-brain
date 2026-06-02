@@ -44,6 +44,11 @@ export class FilesystemAdapter implements VaultAdapter {
     await rename(fullFrom, fullTo);
   }
 
+  async delete(path: string): Promise<void> {
+    const { rm } = await import("fs/promises");
+    await rm(this.safePath(path), { force: true });  // force: no error if already gone
+  }
+
   async list(dirPath = ""): Promise<string[]> {
     const { readdir } = await import("fs/promises");
     const fullPath = this.safePath(dirPath || ".");

@@ -10,4 +10,5 @@ export interface VaultAdapter {
   exists(path: string): Promise<boolean>;
   list(dirPath?: string): Promise<string[]>;
   move(from: string, to: string): Promise<void>;
+  delete(path: string): Promise<void>;
 }

@@ -151,4 +151,10 @@ export class CouchDBAdapter implements VaultAdapter {
     // Soft-delete old path
     await this.putDoc(from, { ...meta, deleted: true, mtime: Date.now() });
   }
+
+  async delete(path: string): Promise<void> {
+    const meta = await this.getDoc(path);
+    if (!meta || meta.deleted) return;  // already gone / never existed
+    await this.putDoc(path, { ...meta, deleted: true, mtime: Date.now() });
+  }
 }
