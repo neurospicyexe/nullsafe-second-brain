@@ -170,6 +170,42 @@ describe("VectorStore.hybridSearch", () => {
     rmSync(dbPath);
   });
 
+  it("surfaces a purely conceptual match: query shares NO keywords, found via ANN vector index", () => {
+    const { store, dbPath } = makeStore();
+    store.insert(makeChunk({
+      vault_path: "alpha.md",
+      prefixed_text: "alpha", chunk_text: "alpha",
+      embedding: [1, 0, 0, 0, 0, 0, 0, 0],
+    }) as any);
+    store.insert(makeChunk({
+      vault_path: "bravo.md",
+      prefixed_text: "bravo", chunk_text: "bravo",
+      embedding: [0, 1, 0, 0, 0, 0, 0, 0],
+    }) as any);
+    // Query text matches NOTHING lexically (zero BM25 hits), but its embedding is near alpha.
+    // Old behavior: novelty-ordered sample, arbitrary. New: ANN returns alpha first.
+    const results = store.hybridSearch([0.96, 0.05, 0, 0, 0, 0, 0, 0], "zzzznomatchanywhere", 10);
+    expect(results.length).toBeGreaterThan(0);
+    expect(results[0].vault_path).toBe("alpha.md");
+    store.close();
+    rmSync(dbPath);
+  });
+
+  it("ANN backfill on initialize indexes pre-existing embeddings (the upgrade path)", () => {
+    const { store, dbPath } = makeStore();
+    const db = (store as any).db as Database.Database;
+    // Insert directly into embeddings, bypassing insert()'s vec sync (simulates rows that
+    // existed before sqlite-vec was added). Then initialize() must backfill the ANN index.
+    db.prepare(
+      "INSERT INTO embeddings (id, vault_path, companion, content_type, chunk_text, prefixed_text, embedding, tags) VALUES (?,?,?,?,?,?,?,?)"
+    ).run("legacy1", "legacy.md", null, "document", "legacy text", "legacy text", JSON.stringify([0, 0, 1, 0, 0, 0, 0, 0]), "[]");
+    store.initialize();
+    const hits = store.vectorSearch([0, 0, 1, 0, 0, 0, 0, 0], 5);
+    expect(hits.length).toBe(1);
+    store.close();
+    rmSync(dbPath);
+  });
+
   it("ignores stopwords when meaningful tokens remain", () => {
     const { store, dbPath } = makeStore();
     store.insert(makeChunk({

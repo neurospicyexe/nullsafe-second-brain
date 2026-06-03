@@ -1,4 +1,5 @@
 import Database from "better-sqlite3";
+import * as sqliteVec from "sqlite-vec";
 import { randomUUID } from "crypto";
 
 export interface ChunkInsert {
@@ -31,9 +32,20 @@ export interface ChunkRow {
 
 export class VectorStore {
   private db: Database.Database;
+  // ANN (sqlite-vec) state. If the extension fails to load, vecEnabled stays false and
+  // search degrades gracefully to BM25 + novelty fallback — never breaks.
+  private vecEnabled = false;
+  private vecDim: number | null = null;
 
   constructor(dbPath: string) {
     this.db = new Database(dbPath);
+    try {
+      sqliteVec.load(this.db);
+      this.vecEnabled = true;
+    } catch (e) {
+      console.error("[vector-store] sqlite-vec load failed — ANN disabled, falling back to BM25:", e);
+      this.vecEnabled = false;
+    }
   }
 
   initialize(): void {
@@ -106,11 +118,69 @@ export class VectorStore {
     this.db.prepare(
       "UPDATE embeddings SET prefixed_text = chunk_text WHERE prefixed_text IS NULL AND chunk_text IS NOT NULL AND chunk_text != ''"
     ).run();
+
+    // ANN index (sqlite-vec): build a vec0 KNN table over the embeddings we ALREADY have, so
+    // purely conceptual queries (sharing no keywords with the text) still surface relevant chunks.
+    // No re-embedding — the vectors are reused from the embeddings.embedding column. Idempotent:
+    // detect dimension from existing rows, create the table, backfill only rows not yet indexed.
+    if (this.vecEnabled) {
+      try {
+        const sample = this.db.prepare(
+          "SELECT embedding FROM embeddings WHERE embedding IS NOT NULL LIMIT 1"
+        ).get() as { embedding: string } | undefined;
+        if (sample) {
+          const dim = (JSON.parse(sample.embedding) as number[]).length;
+          if (this.ensureVecTable(dim)) {
+            const info = this.db.prepare(
+              "INSERT INTO vec_embeddings(rowid, embedding) SELECT rowid, embedding FROM embeddings WHERE embedding IS NOT NULL AND rowid NOT IN (SELECT rowid FROM vec_embeddings)"
+            ).run();
+            if (info.changes > 0) console.log(`[vector-store] ANN backfill indexed ${info.changes} embeddings (dim ${dim})`);
+          }
+        }
+      } catch (e) {
+        console.error("[vector-store] ANN backfill failed — ANN disabled:", e);
+        this.vecEnabled = false;
+      }
+    }
+  }
+
+  // Create the vec0 KNN virtual table lazily once the embedding dimension is known (it is fixed
+  // at creation). Returns true if the table is ready for this dimension. Cosine distance matches
+  // the existing hybridSearch scoring.
+  private ensureVecTable(dim: number): boolean {
+    if (!this.vecEnabled) return false;
+    if (this.vecDim === dim) return true;
+    if (this.vecDim !== null && this.vecDim !== dim) {
+      console.error(`[vector-store] embedding dim mismatch (table=${this.vecDim}, got=${dim}); skipping ANN for this row`);
+      return false;
+    }
+    if (!Number.isInteger(dim) || dim <= 0 || dim > 16000) return false;
+    this.db.prepare(
+      `CREATE VIRTUAL TABLE IF NOT EXISTS vec_embeddings USING vec0(embedding float[${dim}] distance_metric=cosine)`
+    ).run();
+    this.vecDim = dim;
+    return true;
+  }
+
+  // KNN over the vec0 index. Returns rowids (matching embeddings.rowid) ordered by cosine distance.
+  // vec0 REQUIRES a LIMIT or k= constraint. Returns [] when ANN is unavailable or dim mismatches.
+  vectorSearch(queryEmbedding: number[], k: number): Array<{ rowid: number; distance: number }> {
+    if (!this.vecEnabled || this.vecDim === null) return [];
+    if (queryEmbedding.length !== this.vecDim) return [];
+    if (k <= 0) return [];
+    try {
+      return this.db.prepare(
+        "SELECT rowid, distance FROM vec_embeddings WHERE embedding MATCH ? ORDER BY distance LIMIT ?"
+      ).all(JSON.stringify(queryEmbedding), k) as Array<{ rowid: number; distance: number }>;
+    } catch (e) {
+      console.error("[vector-store] vectorSearch failed:", e);
+      return [];
+    }
   }
 
   insert(chunk: ChunkInsert): string {
     const id = randomUUID();
-    this.db.prepare(`
+    const info = this.db.prepare(`
       INSERT INTO embeddings
         (id, vault_path, companion, content_type, chunk_text, prefixed_text, section, chunk_index, embedding, tags)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -119,6 +189,18 @@ export class VectorStore {
       chunk.prefixed_text ?? null, chunk.section ?? null, chunk.chunk_index ?? null,
       JSON.stringify(chunk.embedding), JSON.stringify(chunk.tags)
     );
+
+    // Keep the ANN index in sync. rowid must be bound as BigInt for vec0 (better-sqlite3 binds
+    // plain JS numbers as REAL, which vec0 rejects for its integer primary key). Non-fatal.
+    if (this.vecEnabled && Array.isArray(chunk.embedding) && chunk.embedding.length > 0
+        && this.ensureVecTable(chunk.embedding.length)) {
+      try {
+        this.db.prepare("INSERT INTO vec_embeddings(rowid, embedding) VALUES (?, ?)")
+          .run(BigInt(info.lastInsertRowid), JSON.stringify(chunk.embedding));
+      } catch (e) {
+        console.error("[vector-store] ANN insert sync failed (non-fatal):", e);
+      }
+    }
     return id;
   }
 
@@ -160,6 +242,13 @@ export class VectorStore {
   }
 
   deleteByPath(vaultPath: string): void {
+    // Remove matching rows from the ANN index first (collect rowids before they're gone).
+    if (this.vecEnabled && this.vecDim !== null) {
+      const rows = this.db.prepare("SELECT rowid FROM embeddings WHERE vault_path = ?").all(vaultPath) as { rowid: number }[];
+      for (const r of rows) {
+        try { this.db.prepare("DELETE FROM vec_embeddings WHERE rowid = ?").run(BigInt(r.rowid)); } catch { /* non-fatal */ }
+      }
+    }
     this.db.prepare("DELETE FROM embeddings WHERE vault_path = ?").run(vaultPath);
   }
 
@@ -183,17 +272,24 @@ export class VectorStore {
       for (const r of ftsRows) bm25Scores.set(r.rowid, -r.bm25);
     }
 
-    // Step 2: Load only candidate rows. BM25 hits are the primary candidate set.
-    // If no BM25 matches (pure semantic / no text), fall back to a novelty-ordered sample
-    // rather than a full scan — avoids O(n) memory growth as the index scales.
-    let rows: Record<string, unknown>[];
+    // Step 2: Candidate set = BM25 lexical hits UNION ANN nearest neighbors. The ANN side is the
+    // cure for purely conceptual queries (no shared keywords) — true cosine nearest-neighbors via
+    // the vec0 index, not the old arbitrary novelty-ordered sample. Both sets are re-ranked by the
+    // same cosine+BM25 scoring below, so unioning only improves recall.
     const bm25Rowids = [...bm25Scores.keys()];
-    if (bm25Rowids.length > 0) {
-      const placeholders = bm25Rowids.map(() => "?").join(",");
+    const annHits = this.vectorSearch(queryEmbedding, Math.max(limit * 5, 50));
+    const candidateRowids = new Set<number>([...bm25Rowids, ...annHits.map(h => h.rowid)]);
+
+    let rows: Record<string, unknown>[];
+    if (candidateRowids.size > 0) {
+      // Cap the IN list well under SQLITE_MAX_VARIABLE_NUMBER (999).
+      const ids = [...candidateRowids].slice(0, 900);
+      const placeholders = ids.map(() => "?").join(",");
       rows = this.db.prepare(
         `SELECT rowid, * FROM embeddings WHERE rowid IN (${placeholders})`
-      ).all(...bm25Rowids) as Record<string, unknown>[];
+      ).all(...ids) as Record<string, unknown>[];
     } else {
+      // No lexical hits and no ANN (e.g. extension unavailable): novelty-ordered sample fallback.
       rows = this.db.prepare(
         "SELECT rowid, * FROM embeddings ORDER BY novelty_score DESC LIMIT 500"
       ).all() as Record<string, unknown>[];
