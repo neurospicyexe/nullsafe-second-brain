@@ -50,6 +50,32 @@ describe("VectorStore schema", () => {
   });
 });
 
+describe("VectorStore prefixed_text self-heal", () => {
+  it("backfills NULL prefixed_text from chunk_text on initialize, making the chunk keyword-searchable", () => {
+    const { store, dbPath } = makeStore();
+    // Simulate the old ingestion-pipeline path: insert with NO prefixed_text -> NULL -> not in FTS.
+    store.insert(makeChunk({
+      vault_path: "rag/growth_journal/7",
+      prefixed_text: undefined,
+      chunk_text: "drevan noticed a recurring pattern about thresholds",
+      embedding: [1, 0, 0, 0, 0, 0, 0, 0],
+    }) as any);
+    const db = (store as any).db as Database.Database;
+    // Before heal: invisible to FTS.
+    const before = db.prepare("SELECT count(*) n FROM embeddings_fts WHERE embeddings_fts MATCH ?").get("thresholds") as { n: number };
+    expect(before.n).toBe(0);
+    // Re-run initialize (idempotent) -> heal backfills prefixed_text and the UPDATE trigger syncs FTS.
+    store.initialize();
+    const after = db.prepare("SELECT count(*) n FROM embeddings_fts WHERE embeddings_fts MATCH ?").get("thresholds") as { n: number };
+    expect(after.n).toBe(1);
+    // And it now surfaces via hybridSearch keyword recall.
+    const results = store.hybridSearch([1, 0, 0, 0, 0, 0, 0, 0], "thresholds", 10);
+    expect(results.map(r => r.vault_path)).toContain("rag/growth_journal/7");
+    store.close();
+    rmSync(dbPath);
+  });
+});
+
 describe("VectorStore.insert (new fields)", () => {
   it("stores prefixed_text, section, chunk_index", () => {
     const { store, dbPath } = makeStore();
@@ -116,6 +142,45 @@ describe("VectorStore.hybridSearch", () => {
     const results = store.hybridSearch([1, 0, 0, 0, 0, 0, 0, 0], "rosie limping", 10);
     expect(results.length).toBeGreaterThan(0);
     expect(results[0].chunk_text).toContain("rosie");
+    store.close();
+    rmSync(dbPath);
+  });
+
+  it("surfaces partial matches: query tokens split across chunks (OR recall, not implicit-AND)", () => {
+    const { store, dbPath } = makeStore();
+    store.insert(makeChunk({
+      vault_path: "moto.md",
+      prefixed_text: "motorcycle ride through rome",
+      chunk_text: "motorcycle ride through rome",
+      embedding: [1, 0, 0, 0, 0, 0, 0, 0],
+    }) as any);
+    store.insert(makeChunk({
+      vault_path: "garage.md",
+      prefixed_text: "quiet garage with tools",
+      chunk_text: "quiet garage with tools",
+      embedding: [0, 1, 0, 0, 0, 0, 0, 0],
+    }) as any);
+    // No single chunk contains BOTH "motorcycle" and "garage" -- under the old implicit-AND
+    // phrase match this returned zero BM25 candidates. OR-recall must surface both.
+    const results = store.hybridSearch([1, 0, 0, 0, 0, 0, 0, 0], "motorcycle garage", 10);
+    const paths = results.map(r => r.vault_path);
+    expect(paths).toContain("moto.md");
+    expect(paths).toContain("garage.md");
+    store.close();
+    rmSync(dbPath);
+  });
+
+  it("ignores stopwords when meaningful tokens remain", () => {
+    const { store, dbPath } = makeStore();
+    store.insert(makeChunk({
+      vault_path: "spiral.md",
+      prefixed_text: "the spiral work we did",
+      chunk_text: "the spiral work we did",
+      embedding: [1, 0, 0, 0, 0, 0, 0, 0],
+    }) as any);
+    // "what about the spiral" -> only "spiral" is meaningful; must still match.
+    const results = store.hybridSearch([1, 0, 0, 0, 0, 0, 0, 0], "what about the spiral", 10);
+    expect(results.map(r => r.vault_path)).toContain("spiral.md");
     store.close();
     rmSync(dbPath);
   });

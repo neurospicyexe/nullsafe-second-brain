@@ -98,6 +98,14 @@ export class VectorStore {
     if (ftsCount < embeddingsWithPrefix) {
       this.db.prepare("INSERT INTO embeddings_fts(rowid, prefixed_text) SELECT rowid, prefixed_text FROM embeddings WHERE prefixed_text IS NOT NULL").run();
     }
+
+    // Self-heal: rows inserted without prefixed_text (historically the ingestion-pipeline path)
+    // never entered FTS5 and were invisible to keyword search. Backfill prefixed_text from
+    // chunk_text so they become searchable. The AFTER UPDATE trigger syncs FTS5 automatically.
+    // Idempotent: the WHERE guard makes this a no-op once every row has prefixed_text.
+    this.db.prepare(
+      "UPDATE embeddings SET prefixed_text = chunk_text WHERE prefixed_text IS NULL AND chunk_text IS NOT NULL AND chunk_text != ''"
+    ).run();
   }
 
   insert(chunk: ChunkInsert): string {
@@ -162,12 +170,16 @@ export class VectorStore {
 
   hybridSearch(queryEmbedding: number[], queryText: string, limit: number): Array<ChunkRow & { score: number }> {
     // Step 1: BM25 candidates via FTS5 index — sub-millisecond, avoids full table scan.
+    // OR-join the query tokens (with prefix) rather than the default implicit-AND phrase match:
+    // a natural-language query no longer needs EVERY token present in one chunk to surface
+    // candidates. Cosine + BM25 re-rank afterward, so broad recall here only helps. ORDER BY
+    // bm25 keeps the 500 cap filled with the *best* matches, not an arbitrary slice.
     const bm25Scores = new Map<number, number>();
-    const safeQuery = queryText.replace(/[^a-zA-Z0-9 ]/g, " ").trim();
-    if (safeQuery) {
+    const ftsMatch = this.buildFtsMatch(queryText);
+    if (ftsMatch) {
       const ftsRows = this.db.prepare(
-        "SELECT rowid, bm25(embeddings_fts) AS bm25 FROM embeddings_fts WHERE embeddings_fts MATCH ? LIMIT 500"
-      ).all(safeQuery) as { rowid: number; bm25: number }[];
+        "SELECT rowid, bm25(embeddings_fts) AS bm25 FROM embeddings_fts WHERE embeddings_fts MATCH ? ORDER BY bm25 LIMIT 500"
+      ).all(ftsMatch) as { rowid: number; bm25: number }[];
       for (const r of ftsRows) bm25Scores.set(r.rowid, -r.bm25);
     }
 
@@ -285,6 +297,24 @@ export class VectorStore {
     return (this.db.prepare(
       `SELECT * FROM embeddings ${where} LIMIT ?`
     ).all(...bindings) as Record<string, unknown>[]).map(r => this.deserialize(r));
+  }
+
+  // Build an FTS5 MATCH expression from free text. Tokens are sanitized, lowercased, deduped,
+  // quoted (so a token that is itself an FTS operator like "or"/"near" can't break parsing),
+  // given a trailing "*" for prefix matching (plural/tense recall), and OR-joined. Common
+  // stopwords are dropped only when meaningful tokens remain, so "the spiral" searches "spiral"
+  // but "the" alone still matches. Returns "" when there is nothing searchable.
+  private buildFtsMatch(queryText: string): string {
+    const STOPWORDS = new Set([
+      "the","a","an","and","or","but","of","to","in","on","at","for","with","is","are","was",
+      "were","be","been","do","did","does","i","we","you","it","that","this","what","about","my",
+    ]);
+    const tokens = queryText.toLowerCase().replace(/[^a-z0-9 ]/g, " ").split(/\s+/).filter(Boolean);
+    if (tokens.length === 0) return "";
+    const meaningful = tokens.filter(t => !STOPWORDS.has(t));
+    const chosen = meaningful.length > 0 ? meaningful : tokens;
+    const unique = [...new Set(chosen)];
+    return unique.map(t => `"${t}"*`).join(" OR ");
   }
 
   private noveltyFloor(contentType: string): number {

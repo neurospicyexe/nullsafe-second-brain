@@ -116,6 +116,7 @@ describe('IngestionPipeline.run()', () => {
       companion: 'cypher',
       content_type: 'synthesis_summary',
       chunk_text: 'wrapped text',
+      prefixed_text: 'wrapped text', // must be set so the chunk enters the FTS5 keyword index
       embedding: [0.1, 0.2, 0.3],
       tags: [],
     })

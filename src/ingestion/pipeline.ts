@@ -76,12 +76,16 @@ export class IngestionPipeline {
             continue
           }
 
-          // Index into vector store
+          // Index into vector store. prefixed_text MUST be set: the FTS5 lexical index is
+          // built only on prefixed_text, so omitting it makes the chunk invisible to keyword
+          // search (findable only by the cosine fallback). wrappedContent is the searchable
+          // narrative, so it serves as both chunk_text and prefixed_text here.
           this.store.insert({
             vault_path: vaultPath,
             companion: record.companion_id ?? null,
             content_type: record.source_type,
             chunk_text: wrappedContent,
+            prefixed_text: wrappedContent,
             embedding,
             tags: [],
           })
