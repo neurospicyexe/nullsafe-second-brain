@@ -141,6 +141,45 @@ export class Indexer {
     await this.indexContent(vaultPath, content, companion, content_type, tags);
   }
 
+  /**
+   * Full rebuild of the vector index from the source of truth (the vault).
+   * The store is regenerable: when the embedding model changes, every vector must
+   * be re-embedded in the new space. Re-embeds the currently-indexed corpus,
+   * preserving companion/content_type/tags per path (same metadata philosophy as
+   * reindex). Content is re-read from the vault; metadata is carried from the index.
+   *
+   * Idempotent: clears the store, then re-indexes each path. Safe to re-run.
+   * Note: this re-embeds the paths already in the index -- it does not enumerate
+   * the vault, so a fully-empty index must be repopulated via the normal write flow.
+   */
+  async rebuildAll(): Promise<{ paths: number; chunks: number }> {
+    const metaByPath = new Map<
+      string,
+      { companion: string | null; content_type: ContentType; tags: string[] }
+    >();
+    for (const row of this.store.getAll()) {
+      if (metaByPath.has(row.vault_path)) continue;
+      metaByPath.set(row.vault_path, {
+        companion: row.companion ?? null,
+        content_type: (row.content_type ?? "note") as ContentType,
+        tags: row.tags ?? [],
+      });
+    }
+
+    this.store.clear();
+
+    for (const [vaultPath, meta] of metaByPath) {
+      try {
+        const content = await this.adapter.read(vaultPath);
+        await this.indexContent(vaultPath, content, meta.companion, meta.content_type, meta.tags);
+      } catch (err) {
+        console.error(`[rebuildAll] failed for ${vaultPath}:`, err);
+      }
+    }
+
+    return { paths: metaByPath.size, chunks: this.store.getAll().length };
+  }
+
   private async indexContent(
     vaultPath: string,
     content: string,

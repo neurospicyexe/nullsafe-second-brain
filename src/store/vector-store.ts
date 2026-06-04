@@ -257,6 +257,20 @@ export class VectorStore {
     return row !== undefined
   }
 
+  /**
+   * Wipe the entire index. The vault is the source of truth; this store is
+   * disposable and rebuildable (used by Indexer.rebuildAll(), e.g. after an
+   * embedding-model swap when every vector must be regenerated in the new space).
+   * Deleting from embeddings clears embeddings_fts via the AFTER DELETE trigger.
+   * The vec0 ANN table has no triggers and is dimension-fixed, so drop it and
+   * reset the cached dim -- the next insert recreates it at the current dimension.
+   */
+  clear(): void {
+    this.db.prepare("DELETE FROM embeddings").run();
+    try { this.db.prepare("DROP TABLE IF EXISTS vec_embeddings").run(); } catch { /* non-fatal */ }
+    this.vecDim = null;
+  }
+
   hybridSearch(queryEmbedding: number[], queryText: string, limit: number): Array<ChunkRow & { score: number }> {
     // Step 1: BM25 candidates via FTS5 index — sub-millisecond, avoids full table scan.
     // OR-join the query tokens (with prefix) rather than the default implicit-AND phrase match:

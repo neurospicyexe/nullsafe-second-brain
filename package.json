@@ -10,6 +10,7 @@
     "build": "tsc",
     "start": "node --env-file=.env dist/index.js",
     "start:http": "node --env-file=.env dist/index-http.js",
+    "rebuild": "tsx scripts/rebuild-index.ts",
     "test": "vitest run",
     "test:watch": "vitest"
   },
