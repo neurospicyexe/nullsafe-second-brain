@@ -7,7 +7,11 @@ import { semanticChunk } from './chunker.js'
 import type { SemanticChunk } from './chunker.js'
 import { wrapChunk } from './deepseek-wrapper.js'
 
-const MAX_FILE_BYTES = 512 * 1024 // 512 KB
+// 2 MB. The semanticChunk pipeline self-segments large files (80K-char DeepSeek
+// segments, 24K-char embed hard-split), so the cap is only a guard against
+// pathological inputs -- it does not need to be small. Raised from 512 KB so
+// late-ChatGPT exports (e.g. "Recursion Prompt Test.md" at ~542 KB) ingest.
+const MAX_FILE_BYTES = 2 * 1024 * 1024
 
 export interface CorpusOptions {
   intakeDir: string
