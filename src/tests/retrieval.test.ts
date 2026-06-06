@@ -28,6 +28,7 @@ function buildMocks(hybridResults: Array<ChunkRow & { score: number }>) {
     hybridSearch: vi.fn().mockReturnValue(hybridResults),
     noveltySearch: vi.fn().mockReturnValue([]),
     edgeSearch: vi.fn().mockReturnValue([]),
+    searchByContentType: vi.fn().mockReturnValue([]),
     updateNoveltyScores: vi.fn(),
     filterByCompanion: vi.fn().mockReturnValue([]),
   } as unknown as VectorStore;
@@ -136,6 +137,7 @@ describe("sb_search", () => {
       hybridSearch: vi.fn().mockReturnValue([p1Chunk]),
       noveltySearch: vi.fn().mockReturnValue([p2Chunk]),
       edgeSearch: vi.fn().mockReturnValue([p3Chunk]),
+      searchByContentType: vi.fn().mockReturnValue([]),
       updateNoveltyScores: vi.fn(),
       filterByCompanion: vi.fn().mockReturnValue([]),
     } as unknown as VectorStore;
@@ -223,5 +225,61 @@ describe("sb_search", () => {
     const [, , limit] = (store.hybridSearch as ReturnType<typeof vi.fn>).mock.calls[0];
     // pool1Size = Math.round(10 * 0.7) = 7, oversample = 7 * 5 = 35
     expect(limit).toBe(35);
+  });
+
+  it("guaranteed corpus pool: adds historical_corpus chunks as pool 4, additively (beyond limit)", async () => {
+    const p1 = makeChunk({ vault_path: "notes/a.md", score: 0.9, content_type: "note" });
+    const corpus = makeChunk({
+      vault_path: "rag/historical_corpus/Praxis.md/0", score: 0.6, content_type: "historical_corpus",
+    });
+    const store = {
+      hybridSearch: vi.fn().mockReturnValue([p1]),
+      noveltySearch: vi.fn().mockReturnValue([]),
+      edgeSearch: vi.fn().mockReturnValue([]),
+      searchByContentType: vi.fn().mockReturnValue([corpus]),
+      updateNoveltyScores: vi.fn(),
+      filterByCompanion: vi.fn().mockReturnValue([]),
+    } as unknown as VectorStore;
+    const embedder = { embed: vi.fn().mockResolvedValue([0.1, 0.2, 0.3]) } as unknown as Embedder;
+    const tools = buildRetrievalTools(store, embedder);
+
+    const result = await tools.sb_search({ query: "motorcycle", limit: 10 });
+
+    // searchByContentType is asked for the corpus, with a floor and slot count
+    const [, contentType, slots, , floor] =
+      (store.searchByContentType as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(contentType).toBe("historical_corpus");
+    expect(slots).toBe(2);
+    expect(floor).toBeGreaterThan(0);
+    // the corpus chunk surfaces as pool 4, ADDED to (not carved out of) the rest
+    const corpusResult = result.chunks.find((c: { vault_path: string }) => c.vault_path === corpus.vault_path);
+    expect(corpusResult).toBeDefined();
+    expect(corpusResult!.pool).toBe(4);
+    // pool 1 result still present (not demoted)
+    expect(result.chunks.some((c: { vault_path: string }) => c.vault_path === "notes/a.md")).toBe(true);
+  });
+
+  it("scoped mode: content_type routes to searchByContentType only, skips the pools", async () => {
+    const corpus = makeChunk({
+      vault_path: "rag/historical_corpus/Calethian2.md/3", score: 0.7, content_type: "historical_corpus",
+    });
+    const store = {
+      hybridSearch: vi.fn().mockReturnValue([]),
+      noveltySearch: vi.fn().mockReturnValue([]),
+      edgeSearch: vi.fn().mockReturnValue([]),
+      searchByContentType: vi.fn().mockReturnValue([corpus]),
+      updateNoveltyScores: vi.fn(),
+      filterByCompanion: vi.fn().mockReturnValue([]),
+    } as unknown as VectorStore;
+    const embedder = { embed: vi.fn().mockResolvedValue([0.1, 0.2, 0.3]) } as unknown as Embedder;
+    const tools = buildRetrievalTools(store, embedder);
+
+    const result = await tools.sb_search({ query: "calethian", limit: 5, content_type: "historical_corpus" });
+
+    expect(store.hybridSearch).not.toHaveBeenCalled();
+    expect(store.searchByContentType).toHaveBeenCalledWith([0.1, 0.2, 0.3], "historical_corpus", 5);
+    expect(result.scoped_content_type).toBe("historical_corpus");
+    expect(result.chunks).toHaveLength(1);
+    expect(result.chunks[0].vault_path).toBe(corpus.vault_path);
   });
 });

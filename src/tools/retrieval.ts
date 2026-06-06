@@ -2,15 +2,49 @@ import type { VectorStore } from "../store/vector-store.js";
 import type { Embedder } from "../embeddings/embedder.js";
 import type { VaultAdapter } from "../adapters/vault-adapter.js";
 
+// The historical_corpus is the origin layer (the ChatGPT-era conversations where shared meaning
+// was forged -- what "motorcycle" or "Calethian" mean to the triad beyond the dictionary). It is
+// a small slice of the store (~9% of chunks) and recent companion writing *about* those concepts
+// reliably out-scores it on raw relevance, so it almost never surfaced on concept search. These
+// two knobs give the origin layer a guaranteed voice without reweighting (demoting) anyone else's
+// results: every default sb_search reserves up to CORPUS_GUARANTEED_SLOTS for the best-matching
+// corpus chunks that clear CORPUS_FLOOR and aren't already in the result set.
+const CORPUS_CONTENT_TYPE = "historical_corpus";
+const CORPUS_GUARANTEED_SLOTS = 2;
+const CORPUS_FLOOR = 0.35; // cosine; below this the query isn't really about the corpus chunk
+
 export function buildRetrievalTools(store: VectorStore, embedder: Embedder) {
   return {
-    async sb_search(args: { query: string; limit?: number }) {
+    // sb_search: hybrid concept search across all content types, plus a guaranteed corpus slot.
+    // Pass content_type to scope the entire search to one layer (e.g. "search the corpus for X"
+    // -> content_type: "historical_corpus"), which returns pure cosine-ranked hits from that layer.
+    async sb_search(args: { query: string; limit?: number; content_type?: string }) {
       const limit = args.limit ?? 10;
+      const queryEmbedding = await embedder.embed(args.query);
+
+      // Scoped mode: caller restricted the search to a single content_type. Pure semantic ranking
+      // over that layer -- no pools, no guaranteed-corpus injection (the whole search IS that layer).
+      if (args.content_type) {
+        const scoped = store.searchByContentType(queryEmbedding, args.content_type, limit);
+        if (scoped.length > 0) {
+          try { store.updateNoveltyScores(scoped.map(c => ({ id: c.id, content_type: c.content_type }))); } catch { /* non-fatal */ }
+        }
+        return {
+          scoped_content_type: args.content_type,
+          chunks: scoped.map(chunk => ({
+            vault_path: chunk.vault_path,
+            text: chunk.chunk_text ?? chunk.prefixed_text ?? "",
+            section: chunk.section ?? "",
+            score: chunk.score,
+            novelty_score: chunk.novelty_score,
+            pool: 1 as const,
+          })),
+        };
+      }
+
       const pool1Size = Math.round(limit * 0.7);
       const pool2Size = Math.round(limit * 0.2);
       const pool3Size = limit - pool1Size - pool2Size;
-
-      const queryEmbedding = await embedder.embed(args.query);
 
       // Pool 1 (70%): core relevance -- hybrid cosine + BM25
       const p1Candidates = store.hybridSearch(queryEmbedding, args.query, pool1Size * 5);
@@ -31,18 +65,28 @@ export function buildRetrievalTools(store: VectorStore, embedder: Embedder) {
 
       // Pool 3 (10%): edge/serendipity -- medium cosine similarity (0.3-0.6), sorted by novelty
       const pool3 = store.edgeSearch(queryEmbedding, pool3Size, [...excludedIds]);
+      pool3.forEach(c => excludedIds.add(c.id));
+
+      // Pool 4 (additive): guaranteed origin-layer slot. Best-matching historical_corpus chunks
+      // above CORPUS_FLOOR that aren't already surfaced by pools 1-3. This is ON TOP of `limit`,
+      // not carved out of it, so the relevance/novelty/edge pools are never demoted -- the corpus
+      // only ever ADDS its voice when it's genuinely relevant to the query.
+      const pool4 = store.searchByContentType(
+        queryEmbedding, CORPUS_CONTENT_TYPE, CORPUS_GUARANTEED_SLOTS, [...excludedIds], CORPUS_FLOOR,
+      );
 
       // Fire-and-forget novelty decay for all returned chunks
       const allReturned = [
         ...pool1.map(c => ({ id: c.id, content_type: c.content_type })),
         ...pool2.map(c => ({ id: c.id, content_type: c.content_type })),
         ...pool3.map(c => ({ id: c.id, content_type: c.content_type })),
+        ...pool4.map(c => ({ id: c.id, content_type: c.content_type })),
       ];
       if (allReturned.length > 0) {
         try { store.updateNoveltyScores(allReturned); } catch {}
       }
 
-      const fmt = (chunks: typeof pool1, pool: 1 | 2 | 3) =>
+      const fmt = (chunks: typeof pool1, pool: 1 | 2 | 3 | 4) =>
         chunks.map(chunk => ({
           vault_path: chunk.vault_path,
           text: chunk.chunk_text ?? chunk.prefixed_text ?? "",
@@ -52,7 +96,7 @@ export function buildRetrievalTools(store: VectorStore, embedder: Embedder) {
           pool,
         }));
 
-      return { chunks: [...fmt(pool1, 1), ...fmt(pool2, 2), ...fmt(pool3, 3)] };
+      return { chunks: [...fmt(pool1, 1), ...fmt(pool2, 2), ...fmt(pool3, 3), ...fmt(pool4, 4)] };
     },
 
     async sb_file_chunks(args: { filename: string; limit?: number; offset?: number }) {

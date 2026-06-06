@@ -120,8 +120,8 @@ export function createServer(config: SecondBrainConfig) {
 
     // ── Retrieval tools ───────────────────────────────────────────────────────
     server.tool("sb_search",
-      "Semantic vector search across all vault content — use to find notes, documents, memories, or observations by meaning rather than exact words. Good for 'what do we know about X' or 'find anything related to Y'.",
-      { query: z.string().max(10_000), limit: z.number().optional() },
+      "Semantic vector search across all vault content — use to find notes, documents, memories, or observations by meaning rather than exact words. Good for 'what do we know about X' or 'find anything related to Y'. Every search also reserves a guaranteed slot for the historical_corpus (origin-layer ChatGPT-era material) when relevant. Pass content_type to scope the whole search to one layer — e.g. content_type='historical_corpus' to search ONLY the origin corpus ('search the corpus for motorcycle').",
+      { query: z.string().max(10_000), limit: z.number().optional(), content_type: z.string().optional() },
       (args) => retrieval.sb_search(args).then(ok));
 
     server.tool("sb_file_chunks",

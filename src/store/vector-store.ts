@@ -387,6 +387,32 @@ export class VectorStore {
       .slice(0, limit);
   }
 
+  // Content-type-scoped cosine search. Pure semantic ranking over a single content_type.
+  // Used for (a) the guaranteed historical_corpus pool in sb_search so the origin layer always
+  // surfaces on concept queries even when recent companion writing out-scores it, and (b) explicit
+  // scoped search ("search the corpus for X"). A single content_type is a small slice (corpus ~600
+  // rows) so a full cosine scan is cheap and exact — no ANN/BM25 candidate gating needed.
+  // `floor` drops weak matches so an irrelevant query doesn't inject off-topic corpus chunks.
+  searchByContentType(
+    queryEmbedding: number[],
+    contentType: string,
+    limit: number,
+    excludeIds: string[] = [],
+    floor: number = 0,
+  ): Array<ChunkRow & { score: number }> {
+    if (limit <= 0) return [];
+    const excludeSet = new Set(excludeIds);
+    return (this.db.prepare(
+      "SELECT * FROM embeddings WHERE content_type = ?"
+    ).all(contentType) as Record<string, unknown>[])
+      .map(r => this.deserialize(r))
+      .filter(r => !excludeSet.has(r.id))
+      .map(chunk => ({ ...chunk, score: this.cosineSimilarity(queryEmbedding, chunk.embedding) }))
+      .filter(r => r.score >= floor)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, limit);
+  }
+
   // Filtered query for sb_recall — pushes companion, content_type, and LIMIT into SQL
   // rather than loading all rows and slicing in application code.
   queryFiltered(options: { companion: string | null; contentType?: string; limit: number }): ChunkRow[] {
