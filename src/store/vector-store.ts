@@ -252,6 +252,33 @@ export class VectorStore {
     this.db.prepare("DELETE FROM embeddings WHERE vault_path = ?").run(vaultPath);
   }
 
+  // Remove duplicate embedding rows that share the same (vault_path, chunk_index) -- genuine
+  // re-embeds of one source record (e.g. the ingestion pipeline re-wrapping + re-inserting an
+  // edited Halseth row without first deleting the prior embedding). Multi-chunk files are NOT
+  // affected: their chunks have distinct chunk_index, so each (vault_path, chunk_index) is unique.
+  // Keeps the newest row per group (MAX(rowid)) and deletes the rest, syncing the ANN table; the
+  // AFTER DELETE trigger keeps FTS5 in sync. Returns the number of rows removed.
+  // `dryRun` returns the count without deleting -- always check it before applying in prod.
+  dedupeByPathAndIndex(dryRun = false): number {
+    const victims = this.db.prepare(`
+      SELECT rowid FROM embeddings
+      WHERE rowid NOT IN (
+        SELECT MAX(rowid) FROM embeddings GROUP BY vault_path, IFNULL(chunk_index, -1)
+      )
+    `).all() as { rowid: number }[];
+    if (dryRun || victims.length === 0) return victims.length;
+
+    this.db.transaction(() => {
+      for (const v of victims) {
+        if (this.vecEnabled && this.vecDim !== null) {
+          try { this.db.prepare("DELETE FROM vec_embeddings WHERE rowid = ?").run(BigInt(v.rowid)); } catch { /* non-fatal */ }
+        }
+        this.db.prepare("DELETE FROM embeddings WHERE rowid = ?").run(v.rowid);
+      }
+    })();
+    return victims.length;
+  }
+
   existsByPath(path: string): boolean {
     const row = this.db.prepare('SELECT 1 FROM embeddings WHERE vault_path = ? LIMIT 1').get(path)
     return row !== undefined

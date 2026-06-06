@@ -221,3 +221,61 @@ describe("VectorStore.hybridSearch", () => {
     rmSync(dbPath);
   });
 });
+
+describe("VectorStore.searchByContentType", () => {
+  it("returns only the requested content_type, ranked by cosine, respecting floor + excludeIds", () => {
+    const { store, dbPath } = makeStore();
+    const corpusNear = store.insert(makeChunk({
+      vault_path: "rag/historical_corpus/a.md/0", content_type: "historical_corpus",
+      embedding: [1, 0, 0, 0, 0, 0, 0, 0],
+    }) as any);
+    store.insert(makeChunk({
+      vault_path: "rag/historical_corpus/b.md/0", content_type: "historical_corpus",
+      embedding: [0, 1, 0, 0, 0, 0, 0, 0], // orthogonal -> cosine 0, below any positive floor
+    }) as any);
+    store.insert(makeChunk({
+      vault_path: "rag/growth_journal/x", content_type: "growth_journal",
+      embedding: [1, 0, 0, 0, 0, 0, 0, 0], // same vector but wrong content_type -> excluded
+    }) as any);
+
+    const q = [1, 0, 0, 0, 0, 0, 0, 0];
+    const hits = store.searchByContentType(q, "historical_corpus", 10, [], 0.5);
+    // only the near corpus chunk clears the 0.5 floor; the orthogonal one and the journal are out
+    expect(hits.map(h => h.vault_path)).toEqual(["rag/historical_corpus/a.md/0"]);
+    expect(hits.every(h => h.content_type === "historical_corpus")).toBe(true);
+
+    // excludeIds drops an already-surfaced chunk
+    const excluded = store.searchByContentType(q, "historical_corpus", 10, [corpusNear], 0.5);
+    expect(excluded).toHaveLength(0);
+    store.close();
+    rmSync(dbPath);
+  });
+});
+
+describe("VectorStore.dedupeByPathAndIndex", () => {
+  it("removes same-(vault_path,chunk_index) dupes keeping newest, preserves real multi-chunk files", () => {
+    const { store, dbPath } = makeStore();
+    // A legitimately multi-chunk file: distinct chunk_index -> must be untouched.
+    store.insert(makeChunk({ vault_path: "doc.md", chunk_index: 0, chunk_text: "c0" }) as any);
+    store.insert(makeChunk({ vault_path: "doc.md", chunk_index: 1, chunk_text: "c1" }) as any);
+    // A re-embedded single record: same (vault_path, chunk_index) twice -> one is a dupe.
+    store.insert(makeChunk({ vault_path: "rag/note/7", chunk_index: 0, chunk_text: "old wrap" }) as any);
+    const newestId = store.insert(makeChunk({ vault_path: "rag/note/7", chunk_index: 0, chunk_text: "new wrap" }) as any);
+
+    const dryCount = store.dedupeByPathAndIndex(true);
+    expect(dryCount).toBe(1); // dry run reports, deletes nothing
+    expect(store.filterByPath("rag/note/7")).toHaveLength(2);
+
+    const removed = store.dedupeByPathAndIndex();
+    expect(removed).toBe(1);
+    // multi-chunk file intact
+    expect(store.filterByPath("doc.md")).toHaveLength(2);
+    // dupe collapsed to the newest row
+    const remaining = store.filterByPath("rag/note/7");
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0].id).toBe(newestId);
+    expect(remaining[0].chunk_text).toBe("new wrap");
+    store.close();
+    rmSync(dbPath);
+  });
+});
