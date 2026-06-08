@@ -71,9 +71,10 @@ export function buildRetrievalTools(store: VectorStore, embedder: Embedder) {
       // above CORPUS_FLOOR that aren't already surfaced by pools 1-3. This is ON TOP of `limit`,
       // not carved out of it, so the relevance/novelty/edge pools are never demoted -- the corpus
       // only ever ADDS its voice when it's genuinely relevant to the query.
-      const pool4 = store.searchByContentType(
+      // Skipped entirely when limit=0 (caller signalled they want no results).
+      const pool4 = limit > 0 ? store.searchByContentType(
         queryEmbedding, CORPUS_CONTENT_TYPE, CORPUS_GUARANTEED_SLOTS, [...excludedIds], CORPUS_FLOOR,
-      );
+      ) : [];
 
       // Fire-and-forget novelty decay for all returned chunks
       const allReturned = [

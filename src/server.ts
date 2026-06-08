@@ -52,6 +52,23 @@ export function createServer(config: SecondBrainConfig) {
   const store = new VectorStore(dbPath);
   store.initialize();
 
+  // Warn if the ANN index was built with a different embedding dimension than the configured
+  // model produces. This happens when the model is swapped without running `npm run rebuild`.
+  // Stale ANN vectors silently degrade concept search -- the warning prompts the operator to fix it.
+  const storedDim = store.getStoredDim();
+  const KNOWN_EMBED_DIMS: Record<string, number> = {
+    "text-embedding-ada-002": 1536,
+    "text-embedding-3-small": 1536,
+    "text-embedding-3-large": 3072,
+  };
+  const expectedDim = KNOWN_EMBED_DIMS[config.embeddings.model];
+  if (storedDim !== null && expectedDim !== undefined && storedDim !== expectedDim) {
+    console.error(
+      `[startup] WARNING: ANN index dim=${storedDim} does not match "${config.embeddings.model}" dim=${expectedDim}. ` +
+      `Concept search will return stale results. Run "npm run rebuild" to re-index.`
+    );
+  }
+
   const embedder = new OpenAIEmbedder({
     model: config.embeddings.model,
     apiKey: config.embeddings.api_key ?? "",

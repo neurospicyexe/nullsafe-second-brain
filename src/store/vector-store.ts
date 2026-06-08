@@ -142,6 +142,39 @@ export class VectorStore {
         this.vecEnabled = false;
       }
     }
+
+    // Warn if a previous rebuild was interrupted -- the checkpoint table persists across restarts
+    // so the operator knows to re-run `npm run rebuild` to complete the job.
+    if (this.hasRebuildCheckpoint()) {
+      console.warn(
+        "[vector-store] WARNING: Found an incomplete rebuild checkpoint (embeddings_rebuild_checkpoint table). " +
+        "A previous 'npm run rebuild' was interrupted mid-run. Re-run it to restore a complete index."
+      );
+    }
+  }
+
+  // ── Rebuild checkpoint ──────────────────────────────────────────────────────
+  // rebuildAll() snapshots path metadata here before wiping the store. If the process
+  // is killed mid-rebuild the checkpoint survives, initialize() emits a recovery warning,
+  // and the operator knows to re-run `npm run rebuild`.
+
+  saveRebuildCheckpoint(): void {
+    this.db.prepare("DROP TABLE IF EXISTS embeddings_rebuild_checkpoint").run();
+    this.db.prepare(`
+      CREATE TABLE embeddings_rebuild_checkpoint AS
+      SELECT vault_path, companion, content_type, tags FROM embeddings GROUP BY vault_path
+    `).run();
+  }
+
+  clearRebuildCheckpoint(): void {
+    this.db.prepare("DROP TABLE IF EXISTS embeddings_rebuild_checkpoint").run();
+  }
+
+  hasRebuildCheckpoint(): boolean {
+    const row = this.db.prepare(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='embeddings_rebuild_checkpoint'"
+    ).get();
+    return row !== undefined;
   }
 
   // Create the vec0 KNN virtual table lazily once the embedding dimension is known (it is fixed
@@ -198,7 +231,7 @@ export class VectorStore {
         this.db.prepare("INSERT INTO vec_embeddings(rowid, embedding) VALUES (?, ?)")
           .run(BigInt(info.lastInsertRowid), JSON.stringify(chunk.embedding));
       } catch (e) {
-        console.error("[vector-store] ANN insert sync failed (non-fatal):", e);
+        console.error("[vector-store] ANN insert sync failed (non-fatal) — run store.initialize() to backfill missing ANN rows:", e);
       }
     }
     return id;
@@ -243,6 +276,10 @@ export class VectorStore {
 
   count(): number {
     return (this.db.prepare("SELECT count(*) AS n FROM embeddings").get() as { n: number }).n;
+  }
+
+  getStoredDim(): number | null {
+    return this.vecDim;
   }
 
   // Returns one metadata row per distinct vault_path without loading embedding blobs.
@@ -432,18 +469,21 @@ export class VectorStore {
   // scoped search ("search the corpus for X"). A single content_type is a small slice (corpus ~600
   // rows) so a full cosine scan is cheap and exact — no ANN/BM25 candidate gating needed.
   // `floor` drops weak matches so an irrelevant query doesn't inject off-topic corpus chunks.
+  // scanCap bounds memory as the corpus grows: loading every row at large scale is O(N) JSON
+  // parse + cosine math; 2000 rows is the practical ceiling before that becomes a GC concern.
   searchByContentType(
     queryEmbedding: number[],
     contentType: string,
     limit: number,
     excludeIds: string[] = [],
     floor: number = 0,
+    scanCap = 2000,
   ): Array<ChunkRow & { score: number }> {
     if (limit <= 0) return [];
     const excludeSet = new Set(excludeIds);
     return (this.db.prepare(
-      "SELECT * FROM embeddings WHERE content_type = ?"
-    ).all(contentType) as Record<string, unknown>[])
+      "SELECT * FROM embeddings WHERE content_type = ? LIMIT ?"
+    ).all(contentType, scanCap) as Record<string, unknown>[])
       .map(r => this.deserialize(r))
       .filter(r => !excludeSet.has(r.id))
       .map(chunk => ({ ...chunk, score: this.cosineSimilarity(queryEmbedding, chunk.embedding) }))

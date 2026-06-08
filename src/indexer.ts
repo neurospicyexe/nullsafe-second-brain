@@ -153,6 +153,11 @@ export class Indexer {
    * the vault, so a fully-empty index must be repopulated via the normal write flow.
    */
   async rebuildAll(): Promise<{ paths: number; chunks: number }> {
+    // Snapshot path metadata to a recovery table before wiping. If the process is killed
+    // mid-rebuild, this table persists and initialize() emits a warning on next startup,
+    // prompting the operator to re-run `npm run rebuild`.
+    this.store.saveRebuildCheckpoint();
+
     // Collect path metadata WITHOUT loading embedding blobs (GROUP BY avoids per-chunk rows).
     const rows = this.store.distinctPaths();
     const metaByPath = new Map(rows.map(r => [
@@ -175,6 +180,7 @@ export class Indexer {
       }
     }
 
+    this.store.clearRebuildCheckpoint();
     return { paths: metaByPath.size, chunks: this.store.count() };
   }
 

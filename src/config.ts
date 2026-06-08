@@ -14,10 +14,13 @@ const companionSchema = z.object({
 });
 
 const configSchema = z.object({
+  // vault is required for new configs. Older configs (pre-vault key, couchdb-only) omit it;
+  // the default adapter "filesystem" + empty path keeps them parseable -- couchdb configs
+  // never reach the filesystem adapter in server.ts so vault.path is unused for them.
   vault: z.object({
-    adapter: z.enum(["filesystem", "obsidian-rest"]),
-    path: z.string(),
-  }),
+    adapter: z.enum(["filesystem", "obsidian-rest"]).default("filesystem"),
+    path: z.string().default(""),
+  }).default({}),
   obsidian_rest: z.object({ url: z.string(), api_key: z.string() }).optional(),
   halseth: z.object({ url: z.string(), secret: z.string() }),
   plural: z.object({ enabled: z.boolean(), mcp_url: z.string().optional() }),
