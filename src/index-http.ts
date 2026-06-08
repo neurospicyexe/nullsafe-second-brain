@@ -63,7 +63,7 @@ const { port, api_key } = config.http;
 
 // Log what we initialized — no secrets, just shape
 console.log("[startup] Configuration loaded:");
-console.log(`  adapter  : ${config.couchdb ? "couchdb" : "filesystem"}`);
+console.log(`  adapter  : ${config.vault.adapter}`);
 console.log(`  companions: ${config.companions.map(c => c.id).join(", ")}`);
 console.log(`  embeddings: ${config.embeddings.provider} / ${config.embeddings.model} / key=${config.embeddings.api_key ? "set" : "MISSING"}`);
 console.log(`  halseth  : ${config.halseth.url} / secret=${config.halseth.secret ? "set" : "MISSING"}`);
