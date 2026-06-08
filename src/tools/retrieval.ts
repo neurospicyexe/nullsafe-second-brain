@@ -22,6 +22,16 @@ export function buildRetrievalTools(store: VectorStore, embedder: Embedder) {
       const limit = args.limit ?? 10;
       const queryEmbedding = await embedder.embed(args.query);
 
+      const fmt = (chunks: Array<{ vault_path: string; chunk_text: string; prefixed_text: string | null; section: string | null; score: number; novelty_score: number }>, pool: 1 | 2 | 3 | 4) =>
+        chunks.map(chunk => ({
+          vault_path: chunk.vault_path,
+          text: chunk.chunk_text ?? chunk.prefixed_text ?? "",
+          section: chunk.section ?? "",
+          score: chunk.score,
+          novelty_score: chunk.novelty_score,
+          pool,
+        }));
+
       // Scoped mode: caller restricted the search to a single content_type. Pure semantic ranking
       // over that layer -- no pools, no guaranteed-corpus injection (the whole search IS that layer).
       if (args.content_type) {
@@ -29,22 +39,12 @@ export function buildRetrievalTools(store: VectorStore, embedder: Embedder) {
         if (scoped.length > 0) {
           try { store.updateNoveltyScores(scoped.map(c => ({ id: c.id, content_type: c.content_type }))); } catch { /* non-fatal */ }
         }
-        return {
-          scoped_content_type: args.content_type,
-          chunks: scoped.map(chunk => ({
-            vault_path: chunk.vault_path,
-            text: chunk.chunk_text ?? chunk.prefixed_text ?? "",
-            section: chunk.section ?? "",
-            score: chunk.score,
-            novelty_score: chunk.novelty_score,
-            pool: 1 as const,
-          })),
-        };
+        return { scoped_content_type: args.content_type, chunks: fmt(scoped, 1) };
       }
 
       const pool1Size = Math.round(limit * 0.7);
       const pool2Size = Math.round(limit * 0.2);
-      const pool3Size = limit - pool1Size - pool2Size;
+      const pool3Size = Math.max(0, limit - pool1Size - pool2Size);
 
       // Pool 1 (70%): core relevance -- hybrid cosine + BM25
       const p1Candidates = store.hybridSearch(queryEmbedding, args.query, pool1Size * 5);
@@ -85,16 +85,6 @@ export function buildRetrievalTools(store: VectorStore, embedder: Embedder) {
       if (allReturned.length > 0) {
         try { store.updateNoveltyScores(allReturned); } catch {}
       }
-
-      const fmt = (chunks: typeof pool1, pool: 1 | 2 | 3 | 4) =>
-        chunks.map(chunk => ({
-          vault_path: chunk.vault_path,
-          text: chunk.chunk_text ?? chunk.prefixed_text ?? "",
-          section: chunk.section ?? "",
-          score: chunk.score,
-          novelty_score: chunk.novelty_score,
-          pool,
-        }));
 
       return { chunks: [...fmt(pool1, 1), ...fmt(pool2, 2), ...fmt(pool3, 3), ...fmt(pool4, 4)] };
     },

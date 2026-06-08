@@ -241,6 +241,18 @@ export class VectorStore {
       .map(r => this.deserialize(r));
   }
 
+  count(): number {
+    return (this.db.prepare("SELECT count(*) AS n FROM embeddings").get() as { n: number }).n;
+  }
+
+  // Returns one metadata row per distinct vault_path without loading embedding blobs.
+  // Used by rebuildAll() to collect the path list before clearing the store.
+  distinctPaths(): Array<{ vault_path: string; companion: string | null; content_type: string; tags: string }> {
+    return this.db.prepare(
+      "SELECT vault_path, companion, content_type, tags FROM embeddings GROUP BY vault_path"
+    ).all() as Array<{ vault_path: string; companion: string | null; content_type: string; tags: string }>;
+  }
+
   deleteByPath(vaultPath: string): void {
     // Remove matching rows from the ANN index first (collect rowids before they're gone).
     if (this.vecEnabled && this.vecDim !== null) {

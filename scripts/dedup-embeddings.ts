@@ -9,10 +9,10 @@ import { loadConfig } from '../src/config.js'
 import { createServer } from '../src/server.js'
 
 async function main() {
-  const apply = process.argv.includes('--apply')
+  const dryRun = !process.argv.includes('--apply')
   const { store } = createServer(loadConfig())
-  const count = store.dedupeByPathAndIndex(!apply)
-  if (apply) {
+  const count = store.dedupeByPathAndIndex(dryRun)
+  if (!dryRun) {
     console.log(`[dedup] removed ${count} duplicate rows (kept newest per vault_path+chunk_index)`)
   } else {
     console.log(`[dedup] DRY RUN: ${count} duplicate rows would be removed. Re-run with --apply to delete.`)

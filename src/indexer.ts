@@ -153,18 +153,16 @@ export class Indexer {
    * the vault, so a fully-empty index must be repopulated via the normal write flow.
    */
   async rebuildAll(): Promise<{ paths: number; chunks: number }> {
-    const metaByPath = new Map<
-      string,
-      { companion: string | null; content_type: ContentType; tags: string[] }
-    >();
-    for (const row of this.store.getAll()) {
-      if (metaByPath.has(row.vault_path)) continue;
-      metaByPath.set(row.vault_path, {
-        companion: row.companion ?? null,
-        content_type: (row.content_type ?? "note") as ContentType,
-        tags: row.tags ?? [],
-      });
-    }
+    // Collect path metadata WITHOUT loading embedding blobs (GROUP BY avoids per-chunk rows).
+    const rows = this.store.distinctPaths();
+    const metaByPath = new Map(rows.map(r => [
+      r.vault_path,
+      {
+        companion: r.companion ?? null,
+        content_type: (r.content_type ?? "note") as ContentType,
+        tags: (() => { try { return JSON.parse(r.tags) as string[]; } catch { return []; } })(),
+      },
+    ]));
 
     this.store.clear();
 
@@ -177,7 +175,7 @@ export class Indexer {
       }
     }
 
-    return { paths: metaByPath.size, chunks: this.store.getAll().length };
+    return { paths: metaByPath.size, chunks: this.store.count() };
   }
 
   private async indexContent(
