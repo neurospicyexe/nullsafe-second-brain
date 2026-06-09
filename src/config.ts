@@ -20,7 +20,7 @@ const configSchema = z.object({
   vault: z.object({
     adapter: z.enum(["filesystem", "obsidian-rest"]).default("filesystem"),
     path: z.string().default(""),
-  }).default({}),
+  }).prefault({}),
   obsidian_rest: z.object({ url: z.string(), api_key: z.string() }).optional(),
   halseth: z.object({ url: z.string(), secret: z.string() }),
   plural: z.object({ enabled: z.boolean(), mcp_url: z.string().optional() }),

@@ -37,7 +37,7 @@ describe("VectorStore schema", () => {
     expect(names).toContain("section");
     expect(names).toContain("chunk_index");
     store.close();
-    rmSync(dbPath);
+    rmSync(dbPath, { maxRetries: 5, retryDelay: 100 });
   });
 
   it("creates embeddings_fts virtual table", () => {
@@ -46,7 +46,7 @@ describe("VectorStore schema", () => {
     const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as { name: string }[];
     expect(tables.map(t => t.name)).toContain("embeddings_fts");
     store.close();
-    rmSync(dbPath);
+    rmSync(dbPath, { maxRetries: 5, retryDelay: 100 });
   });
 });
 
@@ -72,7 +72,7 @@ describe("VectorStore prefixed_text self-heal", () => {
     const results = store.hybridSearch([1, 0, 0, 0, 0, 0, 0, 0], "thresholds", 10);
     expect(results.map(r => r.vault_path)).toContain("rag/growth_journal/7");
     store.close();
-    rmSync(dbPath);
+    rmSync(dbPath, { maxRetries: 5, retryDelay: 100 });
   });
 });
 
@@ -85,7 +85,7 @@ describe("VectorStore.insert (new fields)", () => {
     expect(row?.section).toBe("Heading");
     expect(row?.chunk_index).toBe(0);
     store.close();
-    rmSync(dbPath);
+    rmSync(dbPath, { maxRetries: 5, retryDelay: 100 });
   });
 
   it("FTS5 table receives the inserted row", () => {
@@ -95,7 +95,7 @@ describe("VectorStore.insert (new fields)", () => {
     const results = db.prepare("SELECT * FROM embeddings_fts WHERE embeddings_fts MATCH ?").all("xyzzy");
     expect(results.length).toBeGreaterThan(0);
     store.close();
-    rmSync(dbPath);
+    rmSync(dbPath, { maxRetries: 5, retryDelay: 100 });
   });
 
   it("FTS5 table removes row when chunk is deleted", () => {
@@ -106,7 +106,7 @@ describe("VectorStore.insert (new fields)", () => {
     const results = db.prepare("SELECT * FROM embeddings_fts WHERE embeddings_fts MATCH ?").all("abc123");
     expect(results.length).toBe(0);
     store.close();
-    rmSync(dbPath);
+    rmSync(dbPath, { maxRetries: 5, retryDelay: 100 });
   });
 });
 
@@ -120,7 +120,7 @@ describe("VectorStore.filterByPath", () => {
     expect(rows.length).toBe(2);
     expect(rows.every(r => r.vault_path === "a.md")).toBe(true);
     store.close();
-    rmSync(dbPath);
+    rmSync(dbPath, { maxRetries: 5, retryDelay: 100 });
   });
 });
 
@@ -143,7 +143,7 @@ describe("VectorStore.hybridSearch", () => {
     expect(results.length).toBeGreaterThan(0);
     expect(results[0].chunk_text).toContain("rosie");
     store.close();
-    rmSync(dbPath);
+    rmSync(dbPath, { maxRetries: 5, retryDelay: 100 });
   });
 
   it("surfaces partial matches: query tokens split across chunks (OR recall, not implicit-AND)", () => {
@@ -167,7 +167,7 @@ describe("VectorStore.hybridSearch", () => {
     expect(paths).toContain("moto.md");
     expect(paths).toContain("garage.md");
     store.close();
-    rmSync(dbPath);
+    rmSync(dbPath, { maxRetries: 5, retryDelay: 100 });
   });
 
   it("surfaces a purely conceptual match: query shares NO keywords, found via ANN vector index", () => {
@@ -188,7 +188,7 @@ describe("VectorStore.hybridSearch", () => {
     expect(results.length).toBeGreaterThan(0);
     expect(results[0].vault_path).toBe("alpha.md");
     store.close();
-    rmSync(dbPath);
+    rmSync(dbPath, { maxRetries: 5, retryDelay: 100 });
   });
 
   it("ANN backfill on initialize indexes pre-existing embeddings (the upgrade path)", () => {
@@ -203,7 +203,7 @@ describe("VectorStore.hybridSearch", () => {
     const hits = store.vectorSearch([0, 0, 1, 0, 0, 0, 0, 0], 5);
     expect(hits.length).toBe(1);
     store.close();
-    rmSync(dbPath);
+    rmSync(dbPath, { maxRetries: 5, retryDelay: 100 });
   });
 
   it("ignores stopwords when meaningful tokens remain", () => {
@@ -218,7 +218,7 @@ describe("VectorStore.hybridSearch", () => {
     const results = store.hybridSearch([1, 0, 0, 0, 0, 0, 0, 0], "what about the spiral", 10);
     expect(results.map(r => r.vault_path)).toContain("spiral.md");
     store.close();
-    rmSync(dbPath);
+    rmSync(dbPath, { maxRetries: 5, retryDelay: 100 });
   });
 });
 
@@ -248,7 +248,7 @@ describe("VectorStore.searchByContentType", () => {
     const excluded = store.searchByContentType(q, "historical_corpus", 10, [corpusNear], 0.5);
     expect(excluded).toHaveLength(0);
     store.close();
-    rmSync(dbPath);
+    rmSync(dbPath, { maxRetries: 5, retryDelay: 100 });
   });
 });
 
@@ -276,6 +276,6 @@ describe("VectorStore.dedupeByPathAndIndex", () => {
     expect(remaining[0].id).toBe(newestId);
     expect(remaining[0].chunk_text).toBe("new wrap");
     store.close();
-    rmSync(dbPath);
+    rmSync(dbPath, { maxRetries: 5, retryDelay: 100 });
   });
 });
