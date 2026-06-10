@@ -18,6 +18,7 @@ function makeChunk(overrides: Partial<ChunkRow & { score: number }> & { vault_pa
     created_at: "2026-01-01T00:00:00Z",
     novelty_score: 1.0,
     last_surfaced_at: null,
+    valence: null,
     score: 0.9,
     ...overrides,
   };

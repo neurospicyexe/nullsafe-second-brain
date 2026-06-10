@@ -279,3 +279,60 @@ describe("VectorStore.dedupeByPathAndIndex", () => {
     rmSync(dbPath, { maxRetries: 5, retryDelay: 100 });
   });
 });
+
+describe("VectorStore SOMA resonance (valence boost)", () => {
+  it("adds valence column on initialize", () => {
+    const { store, dbPath } = makeStore();
+    const db = (store as any).db as Database.Database;
+    const names = (db.prepare("PRAGMA table_info(embeddings)").all() as { name: string }[]).map(c => c.name);
+    expect(names).toContain("valence");
+    store.close();
+    rmSync(dbPath, { maxRetries: 5, retryDelay: 100 });
+  });
+
+  it("boosts matching-valence chunks when mood is passed, additively", () => {
+    const { store, dbPath } = makeStore();
+    // Two chunks identical in every scoring dimension except valence.
+    store.insert(makeChunk({
+      vault_path: "test/warm.md",
+      chunk_text: "spiral threshold work in the garage",
+      prefixed_text: "spiral threshold work in the garage",
+      embedding: [1, 0, 0, 0, 0, 0, 0, 0],
+      valence: "tender",
+    }) as any);
+    store.insert(makeChunk({
+      vault_path: "test/flat.md",
+      chunk_text: "spiral threshold work in the garage",
+      prefixed_text: "spiral threshold work in the garage",
+      embedding: [1, 0, 0, 0, 0, 0, 0, 0],
+      valence: null,
+    }) as any);
+
+    const withMood = store.hybridSearch([1, 0, 0, 0, 0, 0, 0, 0], "spiral threshold", 2, "Tender");
+    expect(withMood[0].vault_path).toBe("test/warm.md");
+    expect(withMood[0].score).toBeGreaterThan(withMood[1].score);
+
+    // Without mood: identical scores, no boost applied.
+    const noMood = store.hybridSearch([1, 0, 0, 0, 0, 0, 0, 0], "spiral threshold", 2);
+    expect(noMood[0].score).toBeCloseTo(noMood[1].score, 10);
+
+    store.close();
+    rmSync(dbPath, { maxRetries: 5, retryDelay: 100 });
+  });
+
+  it("never gates recall -- null-valence chunks still surface with mood passed", () => {
+    const { store, dbPath } = makeStore();
+    store.insert(makeChunk({
+      vault_path: "test/only.md",
+      chunk_text: "rosie limping at the perimeter",
+      prefixed_text: "rosie limping at the perimeter",
+      embedding: [0, 1, 0, 0, 0, 0, 0, 0],
+      valence: null,
+    }) as any);
+    const results = store.hybridSearch([0, 1, 0, 0, 0, 0, 0, 0], "rosie limping", 5, "tender");
+    expect(results.length).toBe(1);
+    expect(results[0].vault_path).toBe("test/only.md");
+    store.close();
+    rmSync(dbPath, { maxRetries: 5, retryDelay: 100 });
+  });
+});

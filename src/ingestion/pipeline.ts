@@ -18,6 +18,22 @@ function isMachineGenerated(record: IngestRecord): boolean {
   } catch { return false }
 }
 
+// Emotional valence at encoding time, for SOMA-weighted retrieval. The raw row is
+// JSON inside record.content; different sources carry the emotion under different
+// keys. First present-and-non-empty wins. Null = no boost ever (additive only).
+const VALENCE_KEYS = ['emotion', 'valence', 'emotional_register', 'current_mood', 'emotional_frequency'] as const
+
+export function extractValence(record: IngestRecord): string | null {
+  try {
+    const parsed = JSON.parse(record.content) as Record<string, unknown>
+    for (const key of VALENCE_KEYS) {
+      const v = parsed[key]
+      if (typeof v === 'string' && v.trim()) return v.trim().toLowerCase().slice(0, 60)
+    }
+  } catch { /* non-JSON content = no valence */ }
+  return null
+}
+
 export class IngestionPipeline {
   constructor(
     private config: IngestionConfig,
@@ -88,6 +104,7 @@ export class IngestionPipeline {
             prefixed_text: wrappedContent,
             embedding,
             tags: [],
+            valence: extractValence(record),
           })
 
           // Advance HWM per-record (only after successful index)

@@ -119,6 +119,7 @@ describe('IngestionPipeline.run()', () => {
       prefixed_text: 'wrapped text', // must be set so the chunk enters the FTS5 keyword index
       embedding: [0.1, 0.2, 0.3],
       tags: [],
+      valence: null, // no emotion key in mockRecord content
     })
     expect(mockSetHwm).toHaveBeenCalledWith({}, 'synthesis_summary', '2026-03-25T10:00:00Z')
     expect(mockSaveHwm).toHaveBeenCalledWith(mockConfig.hwmPath, expect.objectContaining({ synthesis_summary: '2026-03-25T10:00:00Z' }))

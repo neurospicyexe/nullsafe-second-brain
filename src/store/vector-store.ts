@@ -12,6 +12,8 @@ export interface ChunkInsert {
   chunk_index?: number;
   embedding: number[];
   tags: string[];
+  /** Emotional valence at encoding time (e.g. the feeling's emotion label). Drives resonance boost. */
+  valence?: string | null;
 }
 
 export interface ChunkRow {
@@ -28,6 +30,7 @@ export interface ChunkRow {
   created_at: string;
   novelty_score: number;
   last_surfaced_at: string | null;
+  valence: string | null;
 }
 
 export class VectorStore {
@@ -72,6 +75,7 @@ export class VectorStore {
     if (!cols.includes("chunk_index"))     this.db.prepare("ALTER TABLE embeddings ADD COLUMN chunk_index INTEGER").run();
     if (!cols.includes("novelty_score"))   this.db.prepare("ALTER TABLE embeddings ADD COLUMN novelty_score REAL NOT NULL DEFAULT 1.0").run();
     if (!cols.includes("last_surfaced_at")) this.db.prepare("ALTER TABLE embeddings ADD COLUMN last_surfaced_at TEXT").run();
+    if (!cols.includes("valence"))         this.db.prepare("ALTER TABLE embeddings ADD COLUMN valence TEXT").run();
     this.db.prepare("CREATE INDEX IF NOT EXISTS idx_novelty ON embeddings(novelty_score DESC)").run();
 
     // FTS5 virtual table (content-based, backed by embeddings table)
@@ -215,12 +219,12 @@ export class VectorStore {
     const id = randomUUID();
     const info = this.db.prepare(`
       INSERT INTO embeddings
-        (id, vault_path, companion, content_type, chunk_text, prefixed_text, section, chunk_index, embedding, tags)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (id, vault_path, companion, content_type, chunk_text, prefixed_text, section, chunk_index, embedding, tags, valence)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id, chunk.vault_path, chunk.companion, chunk.content_type, chunk.chunk_text,
       chunk.prefixed_text ?? null, chunk.section ?? null, chunk.chunk_index ?? null,
-      JSON.stringify(chunk.embedding), JSON.stringify(chunk.tags)
+      JSON.stringify(chunk.embedding), JSON.stringify(chunk.tags), chunk.valence ?? null
     );
 
     // Keep the ANN index in sync. rowid must be bound as BigInt for vec0 (better-sqlite3 binds
@@ -347,7 +351,7 @@ export class VectorStore {
     this.vecDim = null;
   }
 
-  hybridSearch(queryEmbedding: number[], queryText: string, limit: number): Array<ChunkRow & { score: number }> {
+  hybridSearch(queryEmbedding: number[], queryText: string, limit: number, mood?: string): Array<ChunkRow & { score: number }> {
     // Step 1: BM25 candidates via FTS5 index — sub-millisecond, avoids full table scan.
     // OR-join the query tokens (with prefix) rather than the default implicit-AND phrase match:
     // a natural-language query no longer needs EVERY token present in one chunk to surface
@@ -401,12 +405,17 @@ export class VectorStore {
     const bMax = bVals.length ? bVals.reduce((a, b) => Math.max(a, b), -Infinity) : 1;
     const bRange = bMax > 0 ? bMax : 1;
 
+    // SOMA resonance: match the state-at-encoding, not just the topic. Additive
+    // nudge only -- never gates recall; null-valence chunks simply get no boost.
+    const moodNorm = mood?.trim().toLowerCase() || null;
+
     return candidates
       .map(({ rowid, chunk }) => {
         const normV = ((vectorScores.get(rowid) ?? 0) - vMin) / vRange;
         const rawB = bm25Scores.get(rowid) ?? 0;
         const normB = bm25Scores.size ? rawB / bRange : 0;
-        const score = 0.7 * normV + 0.3 * normB;
+        const resonance = moodNorm && chunk.valence && chunk.valence.toLowerCase() === moodNorm ? 0.08 : 0;
+        const score = 0.7 * normV + 0.3 * normB + resonance;
         return { ...chunk, score };
       })
       .sort((a, b) => b.score - a.score)
@@ -584,6 +593,7 @@ export class VectorStore {
       prefixed_text: row.prefixed_text as string | null,
       section: row.section as string | null,
       chunk_index: row.chunk_index as number | null,
+      valence: (row.valence as string | null) ?? null,
       embedding,
       tags,
       created_at: row.created_at as string,

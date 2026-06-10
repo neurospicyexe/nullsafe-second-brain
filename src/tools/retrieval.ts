@@ -18,7 +18,9 @@ export function buildRetrievalTools(store: VectorStore, embedder: Embedder) {
     // sb_search: hybrid concept search across all content types, plus a guaranteed corpus slot.
     // Pass content_type to scope the entire search to one layer (e.g. "search the corpus for X"
     // -> content_type: "historical_corpus"), which returns pure cosine-ranked hits from that layer.
-    async sb_search(args: { query: string; limit?: number; content_type?: string }) {
+    // mood: caller's current emotional state (e.g. companion current_mood). Chunks whose
+    // valence-at-encoding matches get a small additive resonance boost in pool 1.
+    async sb_search(args: { query: string; limit?: number; content_type?: string; mood?: string }) {
       const limit = args.limit ?? 10;
       const queryEmbedding = await embedder.embed(args.query);
 
@@ -47,7 +49,7 @@ export function buildRetrievalTools(store: VectorStore, embedder: Embedder) {
       const pool3Size = Math.max(0, limit - pool1Size - pool2Size);
 
       // Pool 1 (70%): core relevance -- hybrid cosine + BM25
-      const p1Candidates = store.hybridSearch(queryEmbedding, args.query, pool1Size * 5);
+      const p1Candidates = store.hybridSearch(queryEmbedding, args.query, pool1Size * 5, args.mood);
       const countByPath = new Map<string, number>();
       const pool1: typeof p1Candidates = [];
       for (const chunk of p1Candidates) {
