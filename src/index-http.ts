@@ -18,6 +18,8 @@ import { wrapChunk } from "./ingestion/deepseek-wrapper.js";
 import { withConcurrencyLimit } from "./ingestion/corpus.js";
 import type { SourceType, IngestRecord } from "./ingestion/types.js";
 import { IngestionPipeline } from "./ingestion/pipeline.js";
+import { checkApiKey } from "./http-auth.js";
+import { contextPrefix } from "./indexer.js";
 
 // ── Startup ──────────────────────────────────────────────────────────────────
 
@@ -241,6 +243,60 @@ app.get("/mcp", mcpHandler);
 app.delete("/mcp", mcpHandler);
 
 // ── Manual ingest endpoint ────────────────────────────────────────────────────
+
+// POST /ingest/discord -- streaming indexer (real-time Discord recall, 2026-06-09).
+// Registered BEFORE the OAuth middleware deliberately: this route is called
+// fire-and-forget from the bots on the same host (server binds 127.0.0.1) and uses
+// the simple SB_INGEST_KEY bearer check instead of the OAuth flow.
+// Vector-store ONLY -- no vault file per message (vault stays curated; the durable
+// record of a conversation still arrives via session synthesis). Rows live under
+// the synthetic path family discord-live/<channel>/<message_id> and age out after
+// 7 days via pruneByPathPrefix, so the store never accumulates unbounded chat.
+// Body: { companion?: string, author: string, content: string, channel_id?: string, message_id: string }
+let lastDiscordPrune = 0;
+app.post("/ingest/discord", async (req: Request, res: Response): Promise<void> => {
+  try {
+    if (!checkApiKey(req.headers.authorization, process.env["SB_INGEST_KEY"] ?? "")) {
+      res.status(401).json({ error: "unauthorized" });
+      return;
+    }
+    const { companion, author, content, channel_id, message_id } = req.body ?? {};
+    if (typeof content !== "string" || !content.trim() || typeof message_id !== "string" || !message_id.trim()) {
+      res.status(400).json({ error: "content and message_id are required" });
+      return;
+    }
+    const vaultPath = `discord-live/${typeof channel_id === "string" && channel_id ? channel_id : "unknown"}/${message_id}.md`;
+    if (store.existsByPath(vaultPath)) {
+      res.json({ ok: true, deduped: true });
+      return;
+    }
+    const resolvedCompanion = typeof companion === "string" && companion.trim() ? companion.toLowerCase().slice(0, 64) : null;
+    const text = `${typeof author === "string" && author ? author : "unknown"}: ${content.trim()}`.slice(0, 4000);
+    const prefixed = contextPrefix({ path: vaultPath, companion: resolvedCompanion, contentType: "observation", section: "discord-live" }) + text;
+    const [embedding] = await embedder.embedBatch([prefixed]);
+    store.insert({
+      vault_path: vaultPath,
+      companion: resolvedCompanion,
+      content_type: "observation",
+      chunk_text: text,
+      prefixed_text: prefixed,
+      section: "discord-live",
+      chunk_index: 0,
+      embedding: embedding ?? [],
+      tags: ["discord-live"],
+    });
+    // TTL sweep at most hourly -- cheap, but no reason to run it per message.
+    if (Date.now() - lastDiscordPrune > 3_600_000) {
+      lastDiscordPrune = Date.now();
+      const pruned = store.pruneByPathPrefix("discord-live/", 7);
+      if (pruned > 0) console.log(`[ingest/discord] pruned ${pruned} expired live rows`);
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("[ingest/discord] error:", err);
+    if (!res.headersSent) res.status(500).json({ error: "internal error" });
+  }
+});
 
 // Same bearer auth as MCP routes
 app.use("/ingest", requireBearerAuth({ verifier: oauthProvider, resourceMetadataUrl }));

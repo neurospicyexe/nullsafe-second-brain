@@ -305,6 +305,28 @@ export class VectorStore {
     this.db.prepare("DELETE FROM embeddings WHERE vault_path = ?").run(vaultPath);
   }
 
+  /**
+   * TTL prune for ephemeral path families (e.g. "discord-live/"). These rows are a
+   * recency layer -- the durable record arrives via session synthesis -- so they age
+   * out instead of accumulating. Returns rows removed. ANN rows removed first, same
+   * pattern as deleteByPath.
+   */
+  pruneByPathPrefix(prefix: string, olderThanDays: number): number {
+    const cutoffExpr = `-${Math.max(1, Math.floor(olderThanDays))} days`;
+    if (this.vecEnabled && this.vecDim !== null) {
+      const rows = this.db.prepare(
+        "SELECT rowid FROM embeddings WHERE vault_path LIKE ? || '%' AND created_at < datetime('now', ?)"
+      ).all(prefix, cutoffExpr) as { rowid: number }[];
+      for (const r of rows) {
+        try { this.db.prepare("DELETE FROM vec_embeddings WHERE rowid = ?").run(BigInt(r.rowid)); } catch { /* non-fatal */ }
+      }
+    }
+    const info = this.db.prepare(
+      "DELETE FROM embeddings WHERE vault_path LIKE ? || '%' AND created_at < datetime('now', ?)"
+    ).run(prefix, cutoffExpr);
+    return info.changes;
+  }
+
   // Remove duplicate embedding rows that share the same (vault_path, chunk_index) -- genuine
   // re-embeds of one source record (e.g. the ingestion pipeline re-wrapping + re-inserting an
   // edited Halseth row without first deleting the prior embedding). Multi-chunk files are NOT
