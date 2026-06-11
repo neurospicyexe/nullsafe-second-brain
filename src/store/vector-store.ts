@@ -31,6 +31,9 @@ export interface ChunkRow {
   novelty_score: number;
   last_surfaced_at: string | null;
   valence: string | null;
+  /** Metamemory (0070): how often this chunk was rated useful/useless after recall. */
+  useful_count: number;
+  useless_count: number;
 }
 
 export class VectorStore {
@@ -76,6 +79,8 @@ export class VectorStore {
     if (!cols.includes("novelty_score"))   this.db.prepare("ALTER TABLE embeddings ADD COLUMN novelty_score REAL NOT NULL DEFAULT 1.0").run();
     if (!cols.includes("last_surfaced_at")) this.db.prepare("ALTER TABLE embeddings ADD COLUMN last_surfaced_at TEXT").run();
     if (!cols.includes("valence"))         this.db.prepare("ALTER TABLE embeddings ADD COLUMN valence TEXT").run();
+    if (!cols.includes("useful_count"))    this.db.prepare("ALTER TABLE embeddings ADD COLUMN useful_count INTEGER NOT NULL DEFAULT 0").run();
+    if (!cols.includes("useless_count"))   this.db.prepare("ALTER TABLE embeddings ADD COLUMN useless_count INTEGER NOT NULL DEFAULT 0").run();
     this.db.prepare("CREATE INDEX IF NOT EXISTS idx_novelty ON embeddings(novelty_score DESC)").run();
 
     // FTS5 virtual table (content-based, backed by embeddings table)
@@ -437,7 +442,12 @@ export class VectorStore {
         const rawB = bm25Scores.get(rowid) ?? 0;
         const normB = bm25Scores.size ? rawB / bRange : 0;
         const resonance = moodNorm && chunk.valence && chunk.valence.toLowerCase() === moodNorm ? 0.08 : 0;
-        const score = 0.7 * normV + 0.3 * normB + resonance;
+        // Metamemory reliability (0070, Zikkaron rate_memory + CogCor update_memory_outcome):
+        // Laplace-smoothed usefulness, +/-0.05 max swing. Additive nudge -- never gates.
+        // Fresh chunks (0/0) get reliability 0.5 -> boost exactly 0.
+        const reliability = (chunk.useful_count + 1) / (chunk.useful_count + chunk.useless_count + 2);
+        const metamemory = 0.10 * (reliability - 0.5);
+        const score = 0.7 * normV + 0.3 * normB + resonance + metamemory;
         return { ...chunk, score };
       })
       .sort((a, b) => b.score - a.score)
@@ -621,6 +631,27 @@ export class VectorStore {
       created_at: row.created_at as string,
       novelty_score: (row.novelty_score as number) ?? 1.0,
       last_surfaced_at: (row.last_surfaced_at as string | null) ?? null,
+      useful_count: (row.useful_count as number) ?? 0,
+      useless_count: (row.useless_count as number) ?? 0,
     };
+  }
+
+  // ── Metamemory feedback (0070) ────────────────────────────────────────────────
+
+  /**
+   * Record recall-outcome feedback for chunks by id. Returns the number of rows
+   * actually updated (unknown ids are silently skipped -- feedback on pruned
+   * chunks is not an error).
+   */
+  recordFeedback(ids: string[], useful: boolean): number {
+    const col = useful ? "useful_count" : "useless_count";
+    const stmt = this.db.prepare(`UPDATE embeddings SET ${col} = ${col} + 1 WHERE id = ?`);
+    let updated = 0;
+    this.db.transaction(() => {
+      for (const id of ids.slice(0, 50)) {
+        updated += stmt.run(id).changes;
+      }
+    })();
+    return updated;
   }
 }

@@ -141,6 +141,11 @@ export function createServer(config: SecondBrainConfig) {
       { query: z.string().max(10_000), limit: z.number().optional(), content_type: z.string().optional(), mood: z.string().max(60).optional() },
       (args) => retrieval.sb_search(args).then(ok));
 
+    server.tool("sb_feedback",
+      "Rate recalled chunks as useful or not after an sb_search — pass the chunk ids from the search results. Usefulness feedback nudges future retrieval ranking (metamemory): chunks that keep proving useful surface more readily, chunks that keep missing fade. Never gates recall.",
+      { chunk_ids: z.array(z.string()).max(50), useful: z.boolean() },
+      (args) => retrieval.sb_feedback(args).then(ok));
+
     server.tool("sb_file_chunks",
       "Retrieve all chunks from a specific indexed file by filename — use to read a complete historical conversation, corpus file, or document that was chunked during ingestion. Returns chunks in order. Example filenames: 'Calethian2.md', 'spiralchoice.md'.",
       { filename: z.string().max(256), limit: z.number().optional() },

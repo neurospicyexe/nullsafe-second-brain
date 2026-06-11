@@ -24,8 +24,10 @@ export function buildRetrievalTools(store: VectorStore, embedder: Embedder) {
       const limit = args.limit ?? 10;
       const queryEmbedding = await embedder.embed(args.query);
 
-      const fmt = (chunks: Array<{ vault_path: string; chunk_text: string; prefixed_text: string | null; section: string | null; score: number; novelty_score: number }>, pool: 1 | 2 | 3 | 4) =>
+      const fmt = (chunks: Array<{ id: string; vault_path: string; chunk_text: string; prefixed_text: string | null; section: string | null; score: number; novelty_score: number }>, pool: 1 | 2 | 3 | 4) =>
         chunks.map(chunk => ({
+          // id enables sb_feedback ("that was useful/wrong") on recalled chunks (0070).
+          id: chunk.id,
           vault_path: chunk.vault_path,
           text: chunk.chunk_text ?? chunk.prefixed_text ?? "",
           section: chunk.section ?? "",
@@ -90,6 +92,16 @@ export function buildRetrievalTools(store: VectorStore, embedder: Embedder) {
       }
 
       return { chunks: [...fmt(pool1, 1), ...fmt(pool2, 2), ...fmt(pool3, 3), ...fmt(pool4, 4)] };
+    },
+
+    // sb_feedback: metamemory loop (0070). Rate recalled chunks as useful/useless;
+    // a Laplace-smoothed reliability score nudges (+/-0.05 max) future hybrid ranking.
+    // Unknown ids are skipped silently -- feedback on pruned chunks is not an error.
+    async sb_feedback(args: { chunk_ids: string[]; useful: boolean }) {
+      const ids = (args.chunk_ids ?? []).filter(id => typeof id === "string" && id.length > 0);
+      if (ids.length === 0) return { updated: 0, note: "no chunk_ids given" };
+      const updated = store.recordFeedback(ids, args.useful);
+      return { updated, useful: args.useful };
     },
 
     async sb_file_chunks(args: { filename: string; limit?: number; offset?: number }) {
