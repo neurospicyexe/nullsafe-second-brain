@@ -19,6 +19,8 @@ function makeChunk(overrides: Partial<ChunkRow & { score: number }> & { vault_pa
     novelty_score: 1.0,
     last_surfaced_at: null,
     valence: null,
+    useful_count: 0,
+    useless_count: 0,
     score: 0.9,
     ...overrides,
   };
