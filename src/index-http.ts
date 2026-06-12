@@ -18,6 +18,7 @@ import { wrapChunk } from "./ingestion/deepseek-wrapper.js";
 import { withConcurrencyLimit } from "./ingestion/corpus.js";
 import type { SourceType, IngestRecord } from "./ingestion/types.js";
 import { IngestionPipeline } from "./ingestion/pipeline.js";
+import { evaluateSurprisal } from "./ingestion/surprisal-gate.js";
 import { checkApiKey } from "./http-auth.js";
 import { contextPrefix } from "./indexer.js";
 
@@ -274,6 +275,25 @@ app.post("/ingest/discord", async (req: Request, res: Response): Promise<void> =
     const text = `${typeof author === "string" && author ? author : "unknown"}: ${content.trim()}`.slice(0, 4000);
     const prefixed = contextPrefix({ path: vaultPath, companion: resolvedCompanion, contentType: "observation", section: "discord-live" }) + text;
     const [embedding] = await embedder.embedBatch([prefixed]);
+    // Surprisal write gate (Zikkaron, 2026-06-12). The embedding is computed anyway
+    // (the insert needs it), so the gate costs one brute-force scan over the TTL-bounded
+    // same-channel rows -- no extra embed call. Env knobs:
+    //   SB_SURPRISAL_GATE=false       -- opt out entirely
+    //   SB_SURPRISAL_THRESHOLD=0.90   -- base similarity above which a message is "unsurprising"
+    if (process.env["SB_SURPRISAL_GATE"] !== "false") {
+      const chan = typeof channel_id === "string" && channel_id ? channel_id : "unknown";
+      const maxSim = store.maxSimilarityForPrefix(embedding ?? [], `discord-live/${chan}/`, 2, 200);
+      const { gated, threshold } = evaluateSurprisal(chan, maxSim, {
+        base: Number(process.env["SB_SURPRISAL_THRESHOLD"] ?? 0.90),
+        floor: 0.78,
+        step: 0.03,
+      });
+      if (gated) {
+        console.log(`[ingest/discord] gated (sim ${maxSim.toFixed(3)} >= ${threshold.toFixed(3)}): ${vaultPath}`);
+        res.json({ ok: true, gated: true });
+        return;
+      }
+    }
     store.insert({
       vault_path: vaultPath,
       companion: resolvedCompanion,

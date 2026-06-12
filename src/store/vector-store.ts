@@ -364,6 +364,32 @@ export class VectorStore {
     return row !== undefined
   }
 
+  /** Max cosine similarity between `embedding` and the newest `limit` rows whose
+   *  vault_path starts with `prefix` and which are younger than `sinceDays`.
+   *  Surprisal gate support (2026-06-12): discord-live rows are TTL-bounded, so a
+   *  brute-force scan over the newest few hundred is cheap and avoids coupling the
+   *  gate to sqlite-vec availability. Returns 0 when nothing matches. */
+  maxSimilarityForPrefix(embedding: number[], prefix: string, sinceDays = 2, limit = 200): number {
+    if (embedding.length === 0) return 0;
+    const rows = this.db.prepare(`
+      SELECT embedding FROM embeddings
+      WHERE vault_path LIKE ? || '%' AND created_at > datetime('now', ?)
+      ORDER BY created_at DESC LIMIT ?
+    `).all(prefix, `-${sinceDays} days`, limit) as Array<{ embedding: string }>;
+    let max = 0;
+    const qNorm = Math.sqrt(embedding.reduce((s, x) => s + x * x, 0)) || 1;
+    for (const row of rows) {
+      let e: number[];
+      try { e = JSON.parse(row.embedding) as number[]; } catch { continue; }
+      if (!Array.isArray(e) || e.length !== embedding.length) continue;
+      let dot = 0, n = 0;
+      for (let i = 0; i < e.length; i++) { dot += e[i]! * embedding[i]!; n += e[i]! * e[i]!; }
+      const sim = dot / ((Math.sqrt(n) || 1) * qNorm);
+      if (sim > max) max = sim;
+    }
+    return max;
+  }
+
   /**
    * Wipe the entire index. The vault is the source of truth; this store is
    * disposable and rebuildable (used by Indexer.rebuildAll(), e.g. after an
