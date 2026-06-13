@@ -18,8 +18,9 @@ export function buildRetrievalTools(store: VectorStore, embedder: Embedder) {
     // sb_search: hybrid concept search across all content types, plus a guaranteed corpus slot.
     // Pass content_type to scope the entire search to one layer (e.g. "search the corpus for X"
     // -> content_type: "historical_corpus"), which returns pure cosine-ranked hits from that layer.
-    // mood: caller's current emotional state (e.g. companion current_mood). Chunks whose
-    // valence-at-encoding matches get a small additive resonance boost in pool 1.
+    // mood: caller's current emotional state (e.g. companion current_mood). In pool 1, chunks get a
+    // graded additive resonance boost by emotion-space distance (valence x arousal) to that mood --
+    // closer affect ranks higher. See store/emotion-space.ts. Never gates recall.
     async sb_search(args: { query: string; limit?: number; content_type?: string; mood?: string }) {
       const limit = args.limit ?? 10;
       const queryEmbedding = await embedder.embed(args.query);

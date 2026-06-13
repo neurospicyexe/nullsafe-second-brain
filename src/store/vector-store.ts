@@ -1,6 +1,7 @@
 import Database from "better-sqlite3";
 import * as sqliteVec from "sqlite-vec";
 import { randomUUID } from "crypto";
+import { emotionResonance } from "./emotion-space.js";
 
 export interface ChunkInsert {
   vault_path: string;
@@ -458,16 +459,17 @@ export class VectorStore {
     const bMax = bVals.length ? bVals.reduce((a, b) => Math.max(a, b), -Infinity) : 1;
     const bRange = bMax > 0 ? bMax : 1;
 
-    // SOMA resonance: match the state-at-encoding, not just the topic. Additive
-    // nudge only -- never gates recall; null-valence chunks simply get no boost.
-    const moodNorm = mood?.trim().toLowerCase() || null;
+    // SOMA resonance (EmotionalRAG 2410.23041, takes 1+6): match the affect-at-encoding, graded by
+    // distance in valence x arousal space, not binary label equality. Additive nudge only -- never
+    // gates recall; unknown/null labels get exactly 0. SB_RESONANCE_WEIGHT tunes; 0 disables.
+    const resonanceWeight = Number(process.env.SB_RESONANCE_WEIGHT ?? 0.08);
 
     return candidates
       .map(({ rowid, chunk }) => {
         const normV = ((vectorScores.get(rowid) ?? 0) - vMin) / vRange;
         const rawB = bm25Scores.get(rowid) ?? 0;
         const normB = bm25Scores.size ? rawB / bRange : 0;
-        const resonance = moodNorm && chunk.valence && chunk.valence.toLowerCase() === moodNorm ? 0.08 : 0;
+        const resonance = emotionResonance(chunk.valence, mood, resonanceWeight);
         // Metamemory reliability (0070, Zikkaron rate_memory + CogCor update_memory_outcome):
         // Laplace-smoothed usefulness, +/-0.05 max swing. Additive nudge -- never gates.
         // Fresh chunks (0/0) get reliability 0.5 -> boost exactly 0.

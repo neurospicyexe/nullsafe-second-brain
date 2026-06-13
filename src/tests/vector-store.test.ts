@@ -336,3 +336,43 @@ describe("VectorStore SOMA resonance (valence boost)", () => {
     rmSync(dbPath, { maxRetries: 5, retryDelay: 100 });
   });
 });
+
+describe("VectorStore graded emotion resonance (EmotionalRAG takes 1+6)", () => {
+  it("ranks the emotionally-closer chunk higher when topic is identical", () => {
+    const { store, dbPath } = makeStore();
+    const emb = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8];
+    // Same text + same embedding, different encoded emotion. Only affect distinguishes them.
+    store.insert(makeChunk({ vault_path: "joy.md", chunk_text: "the bridge at dusk",
+      prefixed_text: "the bridge at dusk", embedding: emb, valence: "joy" }) as any);
+    store.insert(makeChunk({ vault_path: "grief.md", chunk_text: "the bridge at dusk",
+      prefixed_text: "the bridge at dusk", embedding: emb, valence: "grief" }) as any);
+    const results = store.hybridSearch(emb, "bridge dusk", 10, "serenity");
+    const joyIdx = results.findIndex(r => r.vault_path === "joy.md");
+    const griefIdx = results.findIndex(r => r.vault_path === "grief.md");
+    expect(joyIdx).toBeGreaterThanOrEqual(0);
+    expect(griefIdx).toBeGreaterThanOrEqual(0);
+    expect(joyIdx).toBeLessThan(griefIdx); // serenity sits nearer joy than grief in affect space
+    store.close();
+    rmSync(dbPath, { maxRetries: 5, retryDelay: 100 });
+  });
+
+  it("SB_RESONANCE_WEIGHT=0 disables the boost (no affect reordering)", () => {
+    const prev = process.env.SB_RESONANCE_WEIGHT;
+    process.env.SB_RESONANCE_WEIGHT = "0";
+    try {
+      const { store, dbPath } = makeStore();
+      const emb = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8];
+      store.insert(makeChunk({ vault_path: "joy.md", chunk_text: "the bridge at dusk",
+        prefixed_text: "the bridge at dusk", embedding: emb, valence: "joy" }) as any);
+      store.insert(makeChunk({ vault_path: "grief.md", chunk_text: "the bridge at dusk",
+        prefixed_text: "the bridge at dusk", embedding: emb, valence: "grief" }) as any);
+      const results = store.hybridSearch(emb, "bridge dusk", 10, "serenity");
+      // With weight 0 the two chunks have identical scores; both still returned, no crash.
+      expect(results.filter(r => r.vault_path === "joy.md" || r.vault_path === "grief.md").length).toBe(2);
+      store.close();
+      rmSync(dbPath, { maxRetries: 5, retryDelay: 100 });
+    } finally {
+      if (prev === undefined) delete process.env.SB_RESONANCE_WEIGHT; else process.env.SB_RESONANCE_WEIGHT = prev;
+    }
+  });
+});
