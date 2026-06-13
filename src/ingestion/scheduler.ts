@@ -10,6 +10,9 @@ import { runSitPrompts } from './sit-prompts.js'
 import { runPersonaFeeder } from './persona-feeder.js'
 import { processCorpus } from './corpus.js'
 import { runVaultMaterializer } from './vault-materializer.js'
+import { runInboxFiler, buildClassifyPrompt, parseDecision } from './inbox-filer.js'
+import { callDeepSeek } from './deepseek-client.js'
+import { Indexer } from '../indexer.js'
 import { cronHealth } from './cron-health.js'
 
 // NOTE: pattern-synthesizer.ts (runPatternSynthesis / runSignalAudit) is
@@ -45,6 +48,7 @@ export function startIngestionScheduler(
   let sitPromptsRunning = false
   let personaFeederRunning = false
   let materializerRunning = false
+  let inboxFilerRunning = false
   let thoughtformRunning = false
 
   cron.schedule(config.cronSchedule, async () => {
@@ -177,6 +181,52 @@ export function startIngestionScheduler(
     })
   } else {
     console.log('[ingestion] vault-materializer NOT registered (no VaultAdapter passed to startIngestionScheduler)')
+  }
+
+  // INBOX auto-filer: hourly (INBOX_FILER_CRON), only when INBOX_FILER=true and a
+  // vault adapter exists. Hybrid mode: auto-files high-confidence notes out of
+  // "00 - INBOX/" and queues uncertain ones for one-tap approval in _filing-plan.md.
+  // Move-only, fully logged, reversible. Vector store stays consistent via onMoved
+  // (deleteByPath + reindex at the new path).
+  if (vault && config.inboxFilerEnabled) {
+    const filerCron = config.inboxFilerCronSchedule ?? '15 * * * *'
+    const indexer = new Indexer(vault, embedder, store)
+    cronHealth.register('inbox_filer', 60 * 60 * 1000)
+    console.log(`[ingestion] inbox-filer cron: ${filerCron} (mode=${config.inboxFilerMode})`)
+    cron.schedule(filerCron, async () => {
+      if (inboxFilerRunning) {
+        console.warn('[ingestion] inbox-filer still running from previous tick, skipping')
+        return
+      }
+      inboxFilerRunning = true
+      cronHealth.start('inbox_filer')
+      try {
+        const stats = await runInboxFiler(
+          {
+            vault,
+            classify: async (note) => parseDecision(
+              await callDeepSeek(config.deepseekApiKey, config.deepseekModel, buildClassifyPrompt(note))
+            ),
+            onMoved: async (from, to) => { store.deleteByPath(from); await indexer.reindex(to) },
+          },
+          {
+            mode: config.inboxFilerMode ?? 'hybrid',
+            dryRun: false,
+            confidenceThreshold: config.inboxFilerConfidence ?? 0.75,
+          },
+        )
+        cronHealth.complete('inbox_filer')
+        console.log(`[ingestion] inbox-filer done: ${stats.filed} filed, ${stats.approved} approved, ${stats.queued} queued, ${stats.failed} failed`)
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        console.error(`[ingestion] inbox-filer error: ${msg}`)
+        cronHealth.fail('inbox_filer', msg)
+      } finally {
+        inboxFilerRunning = false
+      }
+    })
+  } else if (!config.inboxFilerEnabled) {
+    console.log('[ingestion] inbox-filer NOT registered (INBOX_FILER not true)')
   }
 
   // Thoughtform detector: daily at 3am UTC (THOUGHTFORM_CRON).

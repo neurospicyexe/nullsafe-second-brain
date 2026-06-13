@@ -46,4 +46,10 @@ export interface IngestionConfig {
   corpusCronSchedule?: string        // default: '0 */6 * * *' (every 6h); only fires if corpusIntakeDir is set
   vaultMaterializerCronSchedule?: string  // default: '*/30 * * * *' (every 30m); pulls unmaterialized growth rows and writes .md files
   thoughtformDetectorCronSchedule?: string // default: '0 3 * * *' (daily 3am UTC); POSTs /mind/growth/thoughtforms/detect
+  // INBOX auto-filer (2026-06-13). OFF by default -- Raziel flips INBOX_FILER=true
+  // after a dry-run. hybrid: auto-file >= confidence, queue the rest for one-tap approval.
+  inboxFilerEnabled?: boolean              // INBOX_FILER (default false)
+  inboxFilerMode?: 'hybrid' | 'auto' | 'suggest'  // INBOX_FILER_MODE (default 'hybrid')
+  inboxFilerConfidence?: number            // INBOX_FILER_CONFIDENCE (default 0.75)
+  inboxFilerCronSchedule?: string          // INBOX_FILER_CRON (default '15 * * * *', hourly)
 }

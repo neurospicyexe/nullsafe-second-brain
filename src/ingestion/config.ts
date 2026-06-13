@@ -34,5 +34,9 @@ export function loadIngestionConfig(): IngestionConfig {
     corpusCronSchedule: process.env.CORPUS_CRON ?? '0 */6 * * *',
     vaultMaterializerCronSchedule: process.env.VAULT_MATERIALIZER_CRON ?? '*/30 * * * *',
     thoughtformDetectorCronSchedule: process.env.THOUGHTFORM_CRON ?? '0 3 * * *',
+    inboxFilerEnabled: process.env.INBOX_FILER === 'true',
+    inboxFilerMode: (process.env.INBOX_FILER_MODE as 'hybrid' | 'auto' | 'suggest') ?? 'hybrid',
+    inboxFilerConfidence: parseFloat(process.env.INBOX_FILER_CONFIDENCE ?? '0.75'),
+    inboxFilerCronSchedule: process.env.INBOX_FILER_CRON ?? '15 * * * *',
   }
 }
