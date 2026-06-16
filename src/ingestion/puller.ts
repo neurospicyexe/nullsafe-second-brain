@@ -25,6 +25,10 @@ export const ALL_PULLERS: Array<{ source: string; pull: PullFn; isUpdate?: boole
   { source: 'tension_update', pull: pullTensionUpdates, isUpdate: true },
   { source: 'growth_journal', pull: pullGrowthJournal },
   { source: 'companion_conclusion', pull: pullCompanionConclusions },
+  { source: 'somatic_snapshot', pull: pullSomaticSnapshots },
+  { source: 'drift_log', pull: pullDriftLog },
+  { source: 'live_thread', pull: pullLiveThreads },
+  { source: 'basin_history', pull: pullBasinHistory },
 ]
 
 // Exported so tests can verify URL construction directly.
@@ -500,6 +504,143 @@ export async function pullTensionUpdates(
         created_at: rec.last_surfaced_at!,  // HWM tracks last_surfaced_at for this sweep
         companion_id: rec.companion_id,
       }))
+    return { records }
+  } catch (e) {
+    return { records: [], error: (e as Error).message }
+  }
+}
+
+// ── Self-monitoring surfaces (migrations 0020/0022/0028) ─────────────────────
+// somatic_snapshot + drift_log support a server-side `since` filter (clean HWM).
+// live_threads + basin_history do NOT -- they pull the full recent set each cycle;
+// pipeline dedup (existsByPath on rag/<source>/<id>) skips already-indexed rows, so
+// re-pulling is harmless. Left as non-update: the semantic content (snapshot text,
+// thread name/flavor, drift notes) is fixed at insert; mutating flags (charge,
+// caleth_confirmed, dismissed_at) don't warrant a re-embed every 20 minutes.
+
+interface RawSomaticSnapshot {
+  id: number
+  companion_id: string
+  snapshot: string
+  model_used: string | null
+  stale_after: string | null
+  created_at: string
+}
+
+export async function pullSomaticSnapshots(
+  config: IngestionConfig,
+  since?: string,
+): Promise<PullerResult> {
+  try {
+    const url = buildUrl(config.halsethUrl, '/ingest/somatic-snapshots', since)
+    const raw = await fetchRecords(url, config.halsethSecret)
+    const records: IngestRecord[] = (raw as RawSomaticSnapshot[]).map((rec) => ({
+      id: rec.id,
+      source_type: 'somatic_snapshot',
+      content: JSON.stringify(rec),
+      created_at: rec.created_at,
+      companion_id: rec.companion_id,
+    }))
+    return { records }
+  } catch (e) {
+    return { records: [], error: (e as Error).message }
+  }
+}
+
+interface RawDriftLog {
+  id: number
+  companion_id: string
+  signal_type: string
+  context: string | null
+  detected_at: string
+}
+
+export async function pullDriftLog(
+  config: IngestionConfig,
+  since?: string,
+): Promise<PullerResult> {
+  try {
+    const url = buildUrl(config.halsethUrl, '/ingest/drift-log', since)
+    const raw = await fetchRecords(url, config.halsethSecret)
+    const records: IngestRecord[] = (raw as RawDriftLog[]).map((rec) => ({
+      id: rec.id,
+      source_type: 'drift_log',
+      content: JSON.stringify(rec),
+      created_at: rec.detected_at,  // detected_at is the canonical timestamp
+      companion_id: rec.companion_id,
+    }))
+    return { records }
+  } catch (e) {
+    return { records: [], error: (e as Error).message }
+  }
+}
+
+interface RawLiveThread {
+  id: number
+  companion_id: string
+  name: string
+  flavor: string | null
+  charge: number
+  status: string
+  active_since_count: number | null
+  notes: string | null
+  created_at: string
+  closed_at: string | null
+}
+
+// /ingest/live-threads has no `since` param -- request status=all and rely on
+// pipeline dedup. The HWM the pipeline advances is ignored by this puller.
+export async function pullLiveThreads(
+  config: IngestionConfig,
+  _since?: string,
+): Promise<PullerResult> {
+  try {
+    const url = new URL('/ingest/live-threads', config.halsethUrl)
+    url.searchParams.set('status', 'all')
+    url.searchParams.set('limit', '100')
+    const raw = await fetchRecords(url.toString(), config.halsethSecret)
+    const records: IngestRecord[] = (raw as RawLiveThread[]).map((rec) => ({
+      id: rec.id,
+      source_type: 'live_thread',
+      content: JSON.stringify(rec),
+      created_at: rec.created_at,
+      companion_id: rec.companion_id,
+    }))
+    return { records }
+  } catch (e) {
+    return { records: [], error: (e as Error).message }
+  }
+}
+
+interface RawBasinHistory {
+  id: number
+  companion_id: string
+  drift_score: number | null
+  drift_type: string | null
+  caleth_confirmed: number | null
+  dismissed_at: string | null
+  worst_basin: string | null
+  notes: string | null
+  recorded_at: string
+}
+
+// /ingest/basin-history has no `since` param -- pull the recent set and rely on
+// pipeline dedup. recorded_at is the canonical timestamp.
+export async function pullBasinHistory(
+  config: IngestionConfig,
+  _since?: string,
+): Promise<PullerResult> {
+  try {
+    const url = new URL('/ingest/basin-history', config.halsethUrl)
+    url.searchParams.set('limit', '100')
+    const raw = await fetchRecords(url.toString(), config.halsethSecret)
+    const records: IngestRecord[] = (raw as RawBasinHistory[]).map((rec) => ({
+      id: rec.id,
+      source_type: 'basin_history',
+      content: JSON.stringify(rec),
+      created_at: rec.recorded_at,
+      companion_id: rec.companion_id,
+    }))
     return { records }
   } catch (e) {
     return { records: [], error: (e as Error).message }

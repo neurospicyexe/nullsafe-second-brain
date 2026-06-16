@@ -14,6 +14,10 @@ export type SourceType =
   | 'tension'
   | 'growth_journal'
   | 'companion_conclusion'
+  | 'somatic_snapshot'
+  | 'drift_log'
+  | 'live_thread'
+  | 'basin_history'
 
 export interface IngestRecord {
   id: number
