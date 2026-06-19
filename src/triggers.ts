@@ -31,6 +31,18 @@ export async function setupTriggers(
     console.error("[second-brain] On-demand tools enabled.");
   }
 
+  // Echo guard (2026-06-19): daily inter-companion echo reading -> Halseth /mind/echo-metric,
+  // where the Guardian's detectEchoChamber flags a commons trending toward mirroring. Best-effort.
+  try {
+    const { runEchoMetricCron } = await import("./ingestion/echo-metric.js");
+    cron.schedule("45 9 * * *", () => { void runEchoMetricCron(4); });
+    console.error("[second-brain] Echo-metric guard enabled: 45 9 * * *");
+    // Prime one reading shortly after boot so the guard has data without waiting for 9:45.
+    setTimeout(() => { void runEchoMetricCron(4); }, 60_000);
+  } catch (err) {
+    console.warn("[second-brain] echo-metric guard not started:", err instanceof Error ? err.message : err);
+  }
+
   if (config.triggers.event_driven.enabled) {
     console.error("[second-brain] Event-driven triggers configured (webhook support pending halseth v2).");
   }
