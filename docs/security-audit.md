@@ -17,7 +17,7 @@ Key was exposed in chat on 2026-03-11. Still open as of last audit.
 ### Medium
 | # | Location | Issue | Fix |
 |---|----------|-------|-----|
-| M1 | `src/index-http.ts:55-57` | OAuth issuer URL hardcoded as `example.com`. Breaks any alternate deployment. | Move to `config.http.public_url` |
+| M1 | `src/index-http.ts:55-57` | OAuth issuer URL hardcoded as `example.com`. Breaks any alternate deployment. | Move to `config.http.public_url` — **RESOLVED**: issuer/resource/metadata URLs + CORS origin now derive from `config.http.public_url` (falls back to `http://localhost:<port>` with a warning). |
 | M3 | `src/store/vector-store.ts` | `store.getAll()` full scan O(n) -- will OOM at scale (>50k chunks). | Acceptable for now; revisit at scale |
 | M4 | `src/triggers.ts:27-28` | Event-driven triggers silently do nothing if enabled. | Throw if enabled |
 | M5 | `second-brain.config.json` | Config stores multiple secrets in plaintext JSON. | Enforce `chmod 600`; consider env vars |

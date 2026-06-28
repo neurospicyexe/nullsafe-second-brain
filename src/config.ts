@@ -55,6 +55,11 @@ const configSchema = z.object({
   http: z.object({
     port: z.number().int().min(1024).max(65535),
     api_key: z.string().min(32, "http.api_key must be at least 32 characters — generate with: openssl rand -hex 32"),
+    // Public base URL this server is reachable at (scheme + host, no trailing slash),
+    // e.g. "https://mcp.your-domain.example.com". Used to derive the OAuth issuer,
+    // resource-server, and protected-resource-metadata URLs plus the CORS origin.
+    // Optional: stdio mode never needs it; HTTP mode falls back to http://localhost:<port>.
+    public_url: z.string().url().optional(),
   }).optional(),
   couchdb: z.object({
     url: z.string().url(),

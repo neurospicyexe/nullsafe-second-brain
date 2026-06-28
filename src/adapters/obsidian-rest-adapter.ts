@@ -4,7 +4,7 @@ import { dirname } from "path";
 import type { VaultAdapter, VaultWriteOptions } from "./vault-adapter.js";
 
 export interface ObsidianRestConfig {
-  url: string;          // e.g. https://obsidian.example.com (no trailing slash)
+  url: string;          // e.g. https://obsidian.your-domain.example.com (no trailing slash)
   apiKey: string;
   queuePath?: string;   // SQLite file for offline write queue (default: ~/.nullsafe-second-brain/vault-queue.db)
   retryIntervalMs?: number; // base retry interval (default 30s)

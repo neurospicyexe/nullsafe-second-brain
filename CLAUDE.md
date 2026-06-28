@@ -35,7 +35,7 @@ src/
 - Companion names are never hardcoded. Always `companion.id` from config.
 - Companion IDs are always lowercase in config. Tool inputs normalize via `.toLowerCase()`.
 - All vault paths must end in `.md`. `capture.ts` enforces this via `ensureMd()`.
-- Adapter precedence is `obsidian-rest > couchdb > filesystem`. **Use `obsidian-rest` for VPS-side writes** -- the CouchDBAdapter writes are not LiveSync-compatible (chunk hash format mismatch); ObsidianRestAdapter goes through Obsidian's Local REST API plugin and lets LiveSync handle its own chunking. Requires `obsidian.example.com` Cloudflare Tunnel and the plugin installed on the Windows host.
+- Adapter precedence is `obsidian-rest > couchdb > filesystem`. **Use `obsidian-rest` for VPS-side writes** -- the CouchDBAdapter writes are not LiveSync-compatible (chunk hash format mismatch); ObsidianRestAdapter goes through Obsidian's Local REST API plugin and lets LiveSync handle its own chunking. Requires an `obsidian.your-domain.example.com` Cloudflare Tunnel (set via config) and the plugin installed on the Windows host.
 - ObsidianRestAdapter has a SQLite write queue at `~/.nullsafe-second-brain/vault-queue.db` for offline resilience -- writes that fail (Obsidian closed, tunnel down) are queued and retried with exponential backoff (30s base, 50 attempts cap). Operational: `scripts/inspect-orphan-writes.py` for auditing/recovering pre-switchover orphans.
 - `second-brain.config.json` is gitignored. Only `second-brain.config.example.json` is committed.
 - The SQLite vector store lives in `~/.nullsafe-second-brain/vector-store.db` — outside the vault folder.

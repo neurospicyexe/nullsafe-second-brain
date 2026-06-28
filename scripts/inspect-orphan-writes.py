@@ -171,7 +171,7 @@ def main():
     p_preview = sub.add_parser("preview")
     p_preview.add_argument("count", type=int, default=5, nargs="?")
     p_recover = sub.add_parser("recover")
-    p_recover.add_argument("--url", required=True, help="Obsidian REST URL (e.g. https://obsidian.example.com)")
+    p_recover.add_argument("--url", required=True, help="Obsidian REST URL (e.g. https://obsidian.your-domain.example.com)")
     p_recover.add_argument("--key", required=True, help="Bearer API key")
     sub.add_parser("purge")
     args = parser.parse_args()

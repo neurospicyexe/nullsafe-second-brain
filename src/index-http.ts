@@ -64,6 +64,18 @@ try {
 
 const { port, api_key } = config.http;
 
+// Public base URL drives the OAuth issuer / resource-server / metadata URLs and CORS.
+// Set http.public_url in config for production; fall back to localhost for dev.
+let publicUrl = config.http.public_url;
+if (!publicUrl) {
+  publicUrl = `http://localhost:${port}`;
+  console.warn(
+    `[startup] http.public_url is not set — OAuth/CORS defaulting to ${publicUrl}. ` +
+    `Set http.public_url to your public HTTPS URL for production deployments.`,
+  );
+}
+const publicUrlBase = publicUrl.replace(/\/+$/, "");
+
 // Log what we initialized — no secrets, just shape
 console.log("[startup] Configuration loaded:");
 console.log(`  adapter  : ${config.vault.adapter}`);
@@ -72,9 +84,9 @@ console.log(`  embeddings: ${config.embeddings.provider} / ${config.embeddings.m
 console.log(`  halseth  : ${config.halseth.url} / secret=${config.halseth.secret ? "set" : "MISSING"}`);
 console.log(`  port     : ${port}`);
 
-const issuerUrl = new URL("https://mcp.example.com");
-const resourceServerUrl = new URL("https://mcp.example.com/mcp");
-const resourceMetadataUrl = `https://mcp.example.com/.well-known/oauth-protected-resource/mcp`;
+const issuerUrl = new URL(publicUrlBase);
+const resourceServerUrl = new URL(`${publicUrlBase}/mcp`);
+const resourceMetadataUrl = `${publicUrlBase}/.well-known/oauth-protected-resource/mcp`;
 
 const oauthProvider = new SingleUserOAuthProvider(api_key);
 
@@ -85,7 +97,7 @@ app.set("trust proxy", 1);
 
 // CORS must be first — handles OPTIONS preflight before auth runs
 app.use(cors({
-  origin: ["https://claude.ai", "https://mcp.example.com"],
+  origin: ["https://claude.ai", publicUrlBase],
   credentials: true,
 }));
 

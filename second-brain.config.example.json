@@ -22,7 +22,7 @@
   ],
   "patterns": { "enabled": true, "hearth_summary": true, "hearth_summary_path": "nullsafe/nullsystem/_recent-patterns.md" },
   "embeddings": { "provider": "openai", "model": "text-embedding-3-small", "api_key": "" },
-  "http": { "port": 3001, "api_key": "replace-with-a-strong-random-secret" },
+  "http": { "port": 3001, "api_key": "replace-with-a-strong-random-secret", "public_url": "https://your-domain.example.com" },
   "couchdb": {
     "url": "http://localhost:5984",
     "db": "obsidian-vault",
