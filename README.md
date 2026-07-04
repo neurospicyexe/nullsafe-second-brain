@@ -167,3 +167,17 @@ npm run build  # compile to dist/
 | [Halseth](https://github.com/neurospicyexe/halseth) | The data backend this reads from |
 | [Hearth](https://github.com/neurospicyexe/hearth) | Visual dashboard (reads `_recent-patterns.md` this generates) |
 | [nullsafe-plural-v2](https://github.com/neurospicyexe/nullsafe-plural-v2) | SimplyPlural fronting integration |
+
+---
+
+## Acknowledgments
+
+The memory architecture here drew on several open projects we studied closely (all code is our
+own): **[MalkinK/mempalace](https://github.com/MalkinK/mempalace)** (raw-verbatim layering before
+summarization), **[supermemoryai/supermemory](https://github.com/supermemoryai/supermemory)**
+(hook-style automatic capture), **[shadenraze/thalamus](https://github.com/shadenraze/thalamus)**
+(per-message retrieval), and **[menelly/agi-memory](https://github.com/menelly/agi-memory)**
+(episodic/semantic/procedural split). Vault sync rides on the excellent
+[Obsidian Local REST API](https://github.com/coddingtonbear/obsidian-local-rest-api) and
+[Self-hosted LiveSync](https://github.com/vrtmrz/obsidian-livesync) community plugins.
+Fuller credits: [nullsafe-suite acknowledgments](https://github.com/neurospicyexe/nullsafe-suite#acknowledgments). Thank you.
