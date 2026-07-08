@@ -135,6 +135,27 @@ export function buildRetrievalTools(store: VectorStore, embedder: Embedder) {
       };
     },
 
+    // sb_search_by_tags: the third search shape (2026-07-08). Exact tag lookup -- distinct from
+    // sb_search's concept/similarity ranking and sb_file_chunks' path matching. Matches ANY of the
+    // given tags. Currently populated for companion_journal rows only (domain + content-keyword
+    // tags auto-classified at write time); other source tables don't tag yet.
+    async sb_search_by_tags(args: { tags: string[]; limit?: number }) {
+      const tags = (args.tags ?? []).filter(t => typeof t === "string" && t.trim().length > 0);
+      if (tags.length === 0) return { chunks: [], note: "no tags given" };
+      const limit = args.limit ?? 20;
+      const results = store.searchByTags(tags, limit);
+      return {
+        matched_tags: tags,
+        chunks: results.map(chunk => ({
+          id: chunk.id,
+          vault_path: chunk.vault_path,
+          text: chunk.chunk_text ?? chunk.prefixed_text ?? "",
+          tags: chunk.tags,
+          content_type: chunk.content_type,
+        })),
+      };
+    },
+
     async sb_recall(args: { companion: string | null; content_type?: string; limit?: number }) {
       const chunks = store.queryFiltered({
         companion: args.companion,

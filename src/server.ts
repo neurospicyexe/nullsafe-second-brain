@@ -151,6 +151,11 @@ export function createServer(config: SecondBrainConfig) {
       { filename: z.string().max(256), limit: z.number().optional() },
       (args) => retrieval.sb_file_chunks(args).then(ok));
 
+    server.tool("sb_search_by_tags",
+      "Exact tag lookup -- find entries tagged with a specific domain (e.g. 'health', 'projects') or a specific named thing (e.g. 'babita', 'house-of-translation'). Distinct from sb_search (meaning-based similarity) and sb_file_chunks (filename match): this is for 'find things tagged X'. Matches ANY of the given tags. Currently populated for companion_journal entries only.",
+      { tags: z.array(z.string()).max(20), limit: z.number().optional() },
+      (args) => retrieval.sb_search_by_tags(args).then(ok));
+
     server.tool("sb_recall",
       "Retrieve recent vault entries filtered by companion and/or content type — use to recall what was written about a specific companion (drevan, cypher, gaia) or to list recent notes, documents, or session summaries.",
       { companion: z.string().nullable(), content_type: z.string().max(64).optional(), limit: z.number().optional() },

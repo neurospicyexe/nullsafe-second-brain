@@ -34,6 +34,31 @@ export function extractValence(record: IngestRecord): string | null {
   return null
 }
 
+// Halseth source rows carry tags as JSON-array-encoded strings under different column
+// names depending on table (companion_journal: tags + topic_tags; other tables may add
+// their own later). record.content is JSON.stringify(rawRow), so the tags already ride
+// along in every pulled record -- 2026-07-08 finding was that nothing on this side ever
+// unpacked them into the vector store's own tags column. This closes that gap.
+const TAG_KEYS = ['tags', 'topic_tags'] as const
+
+export function extractTags(record: IngestRecord): string[] {
+  const combined = new Set<string>()
+  try {
+    const parsed = JSON.parse(record.content) as Record<string, unknown>
+    for (const key of TAG_KEYS) {
+      const raw = parsed[key]
+      if (typeof raw !== 'string' || !raw.trim()) continue
+      try {
+        const arr = JSON.parse(raw) as unknown;
+        if (Array.isArray(arr)) {
+          for (const t of arr) if (typeof t === 'string' && t.trim()) combined.add(t.trim())
+        }
+      } catch { /* not JSON -- skip this key */ }
+    }
+  } catch { /* non-JSON content = no tags */ }
+  return [...combined]
+}
+
 export class IngestionPipeline {
   constructor(
     private config: IngestionConfig,
@@ -103,7 +128,7 @@ export class IngestionPipeline {
             chunk_text: wrappedContent,
             prefixed_text: wrappedContent,
             embedding,
-            tags: [],
+            tags: extractTags(record),
             valence: extractValence(record),
           })
 

@@ -376,3 +376,52 @@ describe("VectorStore graded emotion resonance (EmotionalRAG takes 1+6)", () => 
     }
   });
 });
+
+describe("VectorStore searchByTags", () => {
+  it("finds a chunk by an exact tag match", () => {
+    const { store, dbPath } = makeStore();
+    store.insert(makeChunk({ vault_path: "babita.md", tags: ["projects", "babita"] }) as any);
+    store.insert(makeChunk({ vault_path: "other.md", tags: ["health"] }) as any);
+    const results = store.searchByTags(["babita"]);
+    expect(results.map(r => r.vault_path)).toEqual(["babita.md"]);
+    store.close();
+    rmSync(dbPath, { maxRetries: 5, retryDelay: 100 });
+  });
+
+  it("matches ANY of multiple requested tags", () => {
+    const { store, dbPath } = makeStore();
+    store.insert(makeChunk({ vault_path: "a.md", tags: ["projects"] }) as any);
+    store.insert(makeChunk({ vault_path: "b.md", tags: ["health"] }) as any);
+    store.insert(makeChunk({ vault_path: "c.md", tags: ["leisure"] }) as any);
+    const results = store.searchByTags(["projects", "health"]);
+    expect(results.map(r => r.vault_path).sort()).toEqual(["a.md", "b.md"]);
+    store.close();
+    rmSync(dbPath, { maxRetries: 5, retryDelay: 100 });
+  });
+
+  it("is case-insensitive", () => {
+    const { store, dbPath } = makeStore();
+    store.insert(makeChunk({ vault_path: "a.md", tags: ["Babita"] }) as any);
+    const results = store.searchByTags(["babita"]);
+    expect(results.map(r => r.vault_path)).toEqual(["a.md"]);
+    store.close();
+    rmSync(dbPath, { maxRetries: 5, retryDelay: 100 });
+  });
+
+  it("does not substring-match (a tag like 'art' does not match 'party')", () => {
+    const { store, dbPath } = makeStore();
+    store.insert(makeChunk({ vault_path: "a.md", tags: ["party"] }) as any);
+    const results = store.searchByTags(["art"]);
+    expect(results).toEqual([]);
+    store.close();
+    rmSync(dbPath, { maxRetries: 5, retryDelay: 100 });
+  });
+
+  it("returns empty array for empty tag input", () => {
+    const { store, dbPath } = makeStore();
+    const results = store.searchByTags([]);
+    expect(results).toEqual([]);
+    store.close();
+    rmSync(dbPath, { maxRetries: 5, retryDelay: 100 });
+  });
+});

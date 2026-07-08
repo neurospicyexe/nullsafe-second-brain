@@ -482,6 +482,23 @@ export class VectorStore {
       .slice(0, limit);
   }
 
+  // Exact tag lookup -- the third search shape (2026-07-08): concept search (hybridSearch)
+  // and file pull are both approximate/exact-by-path; neither answers "find things tagged X."
+  // tags is a JSON array column (better-sqlite3 ships SQLite with json1 built in), so this
+  // matches ANY of the given tags via json_each rather than a LIKE scan over the raw string --
+  // a tag like "art" won't spuriously match inside a stored tag like "party".
+  searchByTags(tags: string[], limit = 20): ChunkRow[] {
+    const clean = tags.map(t => t.trim().toLowerCase()).filter(Boolean);
+    if (clean.length === 0) return [];
+    const clauses = clean.map(() =>
+      "EXISTS (SELECT 1 FROM json_each(embeddings.tags) je WHERE LOWER(je.value) = ?)"
+    ).join(" OR ");
+    const rows = this.db.prepare(
+      `SELECT * FROM embeddings WHERE ${clauses} ORDER BY created_at DESC LIMIT ?`
+    ).all(...clean, limit) as Record<string, unknown>[];
+    return rows.map(r => this.deserialize(r));
+  }
+
   // ── Priority 5: Three-pool surfacing ──────────────────────────────────────────
 
   // Decay novelty_score by 0.1 for each surfaced chunk, floored by content_type weight.
