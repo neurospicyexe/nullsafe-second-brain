@@ -10,7 +10,7 @@ import { loadHwm, saveHwm, getHwm, setHwm } from './hwm.js'
 // Embedding these pollutes semantic search with diagnostic/synthetic text.
 const MACHINE_JOURNAL_SOURCES = new Set(['pattern_worker', 'evaluator', 'synthesis-gap-detector'])
 
-function isMachineGenerated(record: IngestRecord): boolean {
+export function isMachineGenerated(record: IngestRecord): boolean {
   if (record.source_type !== 'companion_journal') return false
   try {
     const parsed = JSON.parse(record.content) as Record<string, unknown>
