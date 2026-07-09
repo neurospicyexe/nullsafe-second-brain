@@ -144,15 +144,25 @@ export function buildRetrievalTools(store: VectorStore, embedder: Embedder) {
       if (tags.length === 0) return { chunks: [], note: "no tags given" };
       const limit = args.limit ?? 20;
       const results = store.searchByTags(tags, limit);
+      // A tag lookup is a LISTING (often many results), not a single deep-dive match like
+      // sb_search's top hit -- chunk_text/prefixed_text carry the full DeepSeek-wrapped
+      // narrative plus the raw source JSON (often 1000+ chars each), which blew Halseth's
+      // response budget down to 1 of 8 real matches surviving (2026-07-09 finding). Trimming
+      // to an excerpt here means the caller sees every match; vault_path/id are still full,
+      // so sb_file_chunks or a direct read can pull the complete entry when that's wanted.
+      const EXCERPT_CHARS = 250;
       return {
         matched_tags: tags,
-        chunks: results.map(chunk => ({
-          id: chunk.id,
-          vault_path: chunk.vault_path,
-          text: chunk.chunk_text ?? chunk.prefixed_text ?? "",
-          tags: chunk.tags,
-          content_type: chunk.content_type,
-        })),
+        chunks: results.map(chunk => {
+          const full = chunk.chunk_text ?? chunk.prefixed_text ?? "";
+          return {
+            id: chunk.id,
+            vault_path: chunk.vault_path,
+            text: full.length > EXCERPT_CHARS ? full.slice(0, EXCERPT_CHARS) + "…" : full,
+            tags: chunk.tags,
+            content_type: chunk.content_type,
+          };
+        }),
       };
     },
 

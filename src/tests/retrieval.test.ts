@@ -32,6 +32,7 @@ function buildMocks(hybridResults: Array<ChunkRow & { score: number }>) {
     noveltySearch: vi.fn().mockReturnValue([]),
     edgeSearch: vi.fn().mockReturnValue([]),
     searchByContentType: vi.fn().mockReturnValue([]),
+    searchByTags: vi.fn().mockReturnValue([]),
     updateNoveltyScores: vi.fn(),
     filterByCompanion: vi.fn().mockReturnValue([]),
   } as unknown as VectorStore;
@@ -284,5 +285,73 @@ describe("sb_search", () => {
     expect(result.scoped_content_type).toBe("historical_corpus");
     expect(result.chunks).toHaveLength(1);
     expect(result.chunks[0].vault_path).toBe(corpus.vault_path);
+  });
+});
+
+describe("sb_search_by_tags", () => {
+  it("truncates each chunk's text to an excerpt so more matches fit in a downstream char budget", async () => {
+    const longText = "x".repeat(2000);
+    const chunks = [
+      makeChunk({ vault_path: "a.md", chunk_text: longText, tags: ["babita"] }),
+      makeChunk({ vault_path: "b.md", chunk_text: longText, tags: ["babita"] }),
+    ];
+    const store = {
+      hybridSearch: vi.fn().mockReturnValue([]),
+      noveltySearch: vi.fn().mockReturnValue([]),
+      edgeSearch: vi.fn().mockReturnValue([]),
+      searchByContentType: vi.fn().mockReturnValue([]),
+      searchByTags: vi.fn().mockReturnValue(chunks),
+      updateNoveltyScores: vi.fn(),
+      filterByCompanion: vi.fn().mockReturnValue([]),
+    } as unknown as VectorStore;
+    const embedder = { embed: vi.fn().mockResolvedValue([0.1, 0.2, 0.3]) } as unknown as Embedder;
+    const tools = buildRetrievalTools(store, embedder);
+
+    const result = await tools.sb_search_by_tags({ tags: ["babita"] });
+
+    expect(result.chunks).toHaveLength(2);
+    for (const chunk of result.chunks) {
+      expect(chunk.text.length).toBeLessThan(300);
+      expect(chunk.text.endsWith("…")).toBe(true);
+    }
+  });
+
+  it("does not truncate text already under the excerpt length", async () => {
+    const chunks = [makeChunk({ vault_path: "a.md", chunk_text: "short entry", tags: ["babita"] })];
+    const store = {
+      hybridSearch: vi.fn().mockReturnValue([]),
+      noveltySearch: vi.fn().mockReturnValue([]),
+      edgeSearch: vi.fn().mockReturnValue([]),
+      searchByContentType: vi.fn().mockReturnValue([]),
+      searchByTags: vi.fn().mockReturnValue(chunks),
+      updateNoveltyScores: vi.fn(),
+      filterByCompanion: vi.fn().mockReturnValue([]),
+    } as unknown as VectorStore;
+    const embedder = { embed: vi.fn().mockResolvedValue([0.1, 0.2, 0.3]) } as unknown as Embedder;
+    const tools = buildRetrievalTools(store, embedder);
+
+    const result = await tools.sb_search_by_tags({ tags: ["babita"] });
+
+    expect(result.chunks[0].text).toBe("short entry");
+  });
+
+  it("passes tags and limit through to store.searchByTags", async () => {
+    const { store, embedder } = buildMocks([]);
+    const tools = buildRetrievalTools(store, embedder);
+
+    await tools.sb_search_by_tags({ tags: ["health", "projects"], limit: 5 });
+
+    expect(store.searchByTags).toHaveBeenCalledWith(["health", "projects"], 5);
+  });
+
+  it("returns empty with a note when no tags given", async () => {
+    const { store, embedder } = buildMocks([]);
+    const tools = buildRetrievalTools(store, embedder);
+
+    const result = await tools.sb_search_by_tags({ tags: [] });
+
+    expect(result.chunks).toEqual([]);
+    expect(result.note).toBeTruthy();
+    expect(store.searchByTags).not.toHaveBeenCalled();
   });
 });
