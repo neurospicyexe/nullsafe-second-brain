@@ -1,4 +1,4 @@
-import { randomUUID, randomBytes } from "crypto";
+import { randomUUID, randomBytes, timingSafeEqual } from "crypto";
 import type { Response } from "express";
 import type { OAuthServerProvider } from "@modelcontextprotocol/sdk/server/auth/provider.js";
 import type { OAuthRegisteredClientsStore } from "@modelcontextprotocol/sdk/server/auth/clients.js";
@@ -10,6 +10,16 @@ import type {
   OAuthTokenRevocationRequest,
 } from "@modelcontextprotocol/sdk/shared/auth.js";
 
+function safeCompare(a: string, b: string): boolean {
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+  if (bufA.length !== bufB.length) {
+    timingSafeEqual(bufA, bufA); // dummy compare -- no early-return timing tell
+    return false;
+  }
+  return timingSafeEqual(bufA, bufB);
+}
+
 interface PendingAuth {
   codeChallenge: string;
   redirectUri: string;
@@ -18,9 +28,10 @@ interface PendingAuth {
 
 /**
  * Minimal single-user OAuth provider for personal MCP server.
- * Auto-approves all authorization requests and issues the configured
- * api_key as the access token. Supports dynamic client registration
- * so Claude.ai can register itself on first connect.
+ * Approves authorization requests only when the caller presents the
+ * configured api_key as a `key` param (2026-07-12 hardening), then issues
+ * that same api_key as the access token. Supports dynamic client
+ * registration so Claude.ai can register itself on first connect.
  */
 export class SingleUserOAuthProvider implements OAuthServerProvider {
   private clients = new Map<string, OAuthClientInformationFull>();
@@ -49,7 +60,7 @@ export class SingleUserOAuthProvider implements OAuthServerProvider {
 
   async authorize(
     client: OAuthClientInformationFull,
-    params: AuthorizationParams,
+    params: AuthorizationParams & { key?: string },
     res: Response,
   ): Promise<void> {
     // Validate redirect_uri against registered URIs (RFC 6749 §10.6)
@@ -59,7 +70,17 @@ export class SingleUserOAuthProvider implements OAuthServerProvider {
       return;
     }
 
-    // Auto-approve — this is a personal single-user server
+    // Passphrase gate (2026-07-12 hardening): authorize() previously approved every
+    // request unconditionally. Mirrors Halseth's own oauth.ts:257 precedent in this
+    // same suite -- the caller must present the configured api_key as `key` before
+    // a code is ever issued. Client self-registration stays open (capped at 50
+    // clients in registerClient above); it grants nothing without this key.
+    if (!params.key || !safeCompare(params.key, this.accessToken)) {
+      res.status(401).json({ error: "invalid_key" });
+      return;
+    }
+
+    // Auto-approve — this is a personal single-user server, gated above.
     const authCode = randomBytes(16).toString("hex");
     this.pendingAuths.set(authCode, {
       codeChallenge: params.codeChallenge,
@@ -109,7 +130,7 @@ export class SingleUserOAuthProvider implements OAuthServerProvider {
   }
 
   async verifyAccessToken(token: string): Promise<AuthInfo> {
-    if (token !== this.accessToken) {
+    if (!safeCompare(token, this.accessToken)) {
       throw new Error("Invalid access token");
     }
     return {
