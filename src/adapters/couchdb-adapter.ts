@@ -1,5 +1,6 @@
 import { fallbackMixedHashEach } from "octagonal-wheels/hash/purejs";
 import type { VaultAdapter, VaultWriteOptions } from "./vault-adapter.js";
+import { assertVaultRelativePath } from "./safe-vault-path.js";
 
 export interface CouchDBConfig {
   url: string;
@@ -52,6 +53,7 @@ export class CouchDBAdapter implements VaultAdapter {
   }
 
   async write({ path, content, overwrite = true }: VaultWriteOptions): Promise<void> {
+    assertVaultRelativePath(path);
     if (!overwrite && await this.exists(path)) return;
 
     const now = Date.now();
@@ -93,6 +95,7 @@ export class CouchDBAdapter implements VaultAdapter {
   }
 
   async read(path: string): Promise<string> {
+    assertVaultRelativePath(path);
     const meta = await this.getDoc(path);
     if (!meta || meta.deleted) throw new Error(`File not found: ${path}`);
 
@@ -109,6 +112,7 @@ export class CouchDBAdapter implements VaultAdapter {
   }
 
   async exists(path: string): Promise<boolean> {
+    assertVaultRelativePath(path);
     const doc = await this.getDoc(path);
     return doc !== null && !doc.deleted;
   }
@@ -142,6 +146,8 @@ export class CouchDBAdapter implements VaultAdapter {
   }
 
   async move(from: string, to: string): Promise<void> {
+    assertVaultRelativePath(from);
+    assertVaultRelativePath(to);
     const meta = await this.getDoc(from);
     if (!meta || meta.deleted) throw new Error(`File not found: ${from}`);
 
@@ -153,6 +159,7 @@ export class CouchDBAdapter implements VaultAdapter {
   }
 
   async delete(path: string): Promise<void> {
+    assertVaultRelativePath(path);
     const meta = await this.getDoc(path);
     if (!meta || meta.deleted) return;  // already gone / never existed
     await this.putDoc(path, { ...meta, deleted: true, mtime: Date.now() });

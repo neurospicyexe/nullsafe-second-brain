@@ -2,6 +2,7 @@ import Database from "better-sqlite3";
 import { mkdirSync } from "fs";
 import { dirname } from "path";
 import type { VaultAdapter, VaultWriteOptions } from "./vault-adapter.js";
+import { assertVaultRelativePath } from "./safe-vault-path.js";
 
 export interface ObsidianRestConfig {
   url: string;          // e.g. https://obsidian.your-domain.example.com (no trailing slash)
@@ -57,6 +58,7 @@ export class ObsidianRestAdapter implements VaultAdapter {
   }
 
   async write({ path, content, overwrite = true }: VaultWriteOptions): Promise<void> {
+    assertVaultRelativePath(path);
     if (!overwrite && (await this.exists(path))) return;
     try {
       await this.putFile(path, content);
@@ -69,6 +71,7 @@ export class ObsidianRestAdapter implements VaultAdapter {
   }
 
   async read(path: string): Promise<string> {
+    assertVaultRelativePath(path);
     const res = await fetch(`${this.base}/vault/${encodeVaultPath(path)}`, {
       headers: { Authorization: this.headers.Authorization },
       signal: AbortSignal.timeout(15_000),
@@ -79,6 +82,7 @@ export class ObsidianRestAdapter implements VaultAdapter {
   }
 
   async exists(path: string): Promise<boolean> {
+    assertVaultRelativePath(path);
     const res = await fetch(`${this.base}/vault/${encodeVaultPath(path)}`, {
       method: "HEAD",
       headers: { Authorization: this.headers.Authorization },
@@ -104,6 +108,8 @@ export class ObsidianRestAdapter implements VaultAdapter {
   }
 
   async move(from: string, to: string): Promise<void> {
+    assertVaultRelativePath(from);
+    assertVaultRelativePath(to);
     // No native move — read + write + delete.
     const content = await this.read(from);
     await this.write({ path: to, content, overwrite: true });
@@ -118,6 +124,7 @@ export class ObsidianRestAdapter implements VaultAdapter {
   }
 
   async delete(path: string): Promise<void> {
+    assertVaultRelativePath(path);
     // Drop any queued write for this path first, so the retry loop can't
     // resurrect the file after we delete it.
     this.queue.prepare("DELETE FROM pending_writes WHERE path = ?").run(path);

@@ -38,6 +38,30 @@ describe("CouchDBAdapter.exists", () => {
   });
 });
 
+describe("CouchDBAdapter path traversal", () => {
+  it("write rejects a path with .. segments", async () => {
+    await expect(adapter.write({ path: "../../outside/note.md", content: "x" }))
+      .rejects.toThrow("resolves outside vault root");
+  });
+
+  it("read rejects a path with .. segments", async () => {
+    await expect(adapter.read("../../outside/note.md")).rejects.toThrow("resolves outside vault root");
+  });
+
+  it("exists rejects a path with .. segments", async () => {
+    await expect(adapter.exists("../../outside/note.md")).rejects.toThrow("resolves outside vault root");
+  });
+
+  it("move rejects when either side has .. segments", async () => {
+    await expect(adapter.move("../../outside.md", "safe.md")).rejects.toThrow("resolves outside vault root");
+    await expect(adapter.move("safe.md", "../../outside.md")).rejects.toThrow("resolves outside vault root");
+  });
+
+  it("delete rejects a path with .. segments", async () => {
+    await expect(adapter.delete("../../outside/note.md")).rejects.toThrow("resolves outside vault root");
+  });
+});
+
 describe("CouchDBAdapter.write", () => {
   it("PUTs a chunk doc and metadata doc", async () => {
     // chunk PUT
