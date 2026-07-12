@@ -53,4 +53,23 @@ describe("ObsidianRestAdapter path traversal", () => {
       .rejects.toThrow("resolves outside vault root");
     expect(adapter.pendingCount()).toBe(0);
   });
+
+  it("list rejects a path with .. segments", async () => {
+    // list() is LLM-reachable via tools/system.ts (adapter.list(args.path ?? "")) and,
+    // for this adapter, exploitable: encodeVaultPath only encodes per-segment so a
+    // literal ".." segment survives to the URL and gets resolved upward by fetch.
+    await expect(adapter.list("../../outside")).rejects.toThrow("resolves outside vault root");
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+});
+
+describe("ObsidianRestAdapter.list", () => {
+  it("accepts an empty string (vault root) and returns the listed files", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ files: ["a.md", "b.md"] }),
+    });
+    const result = await adapter.list("");
+    expect(result).toEqual(["a.md", "b.md"]);
+  });
 });

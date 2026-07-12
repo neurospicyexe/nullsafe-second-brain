@@ -94,6 +94,7 @@ export class ObsidianRestAdapter implements VaultAdapter {
   }
 
   async list(dirPath = ""): Promise<string[]> {
+    assertVaultRelativePath(dirPath);
     const prefix = dirPath ? (dirPath.endsWith("/") ? dirPath : dirPath + "/") : "";
     const res = await fetch(`${this.base}/vault/${encodeVaultPath(prefix)}`, {
       headers: {

@@ -118,6 +118,7 @@ export class CouchDBAdapter implements VaultAdapter {
   }
 
   async list(dirPath = ""): Promise<string[]> {
+    assertVaultRelativePath(dirPath);
     const prefix = dirPath ? (dirPath.endsWith("/") ? dirPath : dirPath + "/") : "";
     // include_docs=true so we can filter soft-deleted docs at list time.
     // Without this, deleted files appear in the listing and callers' subsequent

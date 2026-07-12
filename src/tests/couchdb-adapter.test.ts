@@ -60,6 +60,15 @@ describe("CouchDBAdapter path traversal", () => {
   it("delete rejects a path with .. segments", async () => {
     await expect(adapter.delete("../../outside/note.md")).rejects.toThrow("resolves outside vault root");
   });
+
+  it("list rejects a path with .. segments", async () => {
+    // CouchDB's list() filter (r.id.startsWith(prefix)) isn't exploitable today since a
+    // ".."-prefixed query just matches nothing, but the guard module's docstring claims
+    // parity with FilesystemAdapter.safePath (which guards its list-equivalent), so this
+    // adapter gets it too for consistency and defense-in-depth.
+    await expect(adapter.list("../../outside")).rejects.toThrow("resolves outside vault root");
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
 });
 
 describe("CouchDBAdapter.write", () => {
@@ -165,5 +174,13 @@ describe("CouchDBAdapter.list", () => {
 
     const result = await adapter.list("companions");
     expect(result).toEqual(["companions/drevan/note.md"]);
+  });
+
+  it("accepts an empty string explicitly (vault root)", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ rows: [] }),
+    });
+    await expect(adapter.list("")).resolves.toEqual([]);
   });
 });
