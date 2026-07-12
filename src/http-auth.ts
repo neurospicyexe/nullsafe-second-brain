@@ -1,8 +1,8 @@
 /**
  * Returns true if the request is authorized.
- * If api_key is empty, auth is disabled and all requests pass.
+ * A missing or empty api_key always denies -- there is no "auth disabled" mode.
  */
 export function checkApiKey(authHeader: string | undefined, apiKey: string): boolean {
-  if (!apiKey) return true;
+  if (!apiKey) return false;
   return authHeader === `Bearer ${apiKey}`;
 }

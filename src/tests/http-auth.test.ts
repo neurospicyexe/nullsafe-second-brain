@@ -18,8 +18,8 @@ describe("checkApiKey", () => {
     expect(checkApiKey("mysecret", "mysecret")).toBe(false);
   });
 
-  it("returns true when api_key is empty string (auth disabled)", () => {
-    expect(checkApiKey(undefined, "")).toBe(true);
-    expect(checkApiKey("anything", "")).toBe(true);
+  it("returns false when api_key is empty string (fail closed)", () => {
+    expect(checkApiKey(undefined, "")).toBe(false);
+    expect(checkApiKey("anything", "")).toBe(false);
   });
 });
