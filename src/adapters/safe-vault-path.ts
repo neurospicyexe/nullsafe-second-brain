@@ -11,7 +11,7 @@ export function assertVaultRelativePath(path: string): string {
   if (path.includes("\0")) {
     throw new Error(`Path resolves outside vault root: contains a null byte`);
   }
-  if (path.startsWith("/") || /^[a-zA-Z]:[\\/]/.test(path)) {
+  if (path.startsWith("/") || path.startsWith("\\") || /^[a-zA-Z]:/.test(path)) {
     throw new Error(`Path resolves outside vault root: absolute path "${path}"`);
   }
   const segments = path.split(/[\\/]/);
