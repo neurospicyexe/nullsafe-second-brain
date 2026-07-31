@@ -11,9 +11,32 @@ export interface CronJobHealth {
   lastStarted: string | null
   lastCompleted: string | null
   lastError: string | null
+  /** Consecutive failures. One is noise; a streak is a condition. See ERROR_STREAK_FOR_UNHEALTHY. */
+  consecutiveFailures: number
+  lastErrorAt: string | null
   staleSince: string | null
   expectedIntervalMs: number
 }
+
+/**
+ * How many failures IN A ROW make the service unhealthy.
+ *
+ * 2, not 1, and this is a fix rather than a loosening (2026-07-31). `isHealthy()` returned false for
+ * any job in `status === 'error'`, and that status only cleared on the job's next SUCCESS. The
+ * thoughtform detector runs once a day at 03:00. So a single transient `fetch failed` -- a ~30 second
+ * network blip, with every other cron healthy and the service answering queries perfectly -- pinned
+ * Second Brain at `degraded`/503 for a FULL 24 HOURS, and the suite health check faithfully paged
+ * Raziel about it every 12 hours.
+ *
+ * That is the cry-wolf failure: an alarm that fires for a day over a blip teaches you to ignore the
+ * alarm, and then it is worth less than no alarm at all. Same family as the rails-need-decay lesson --
+ * a latched state with no path back to normal except a once-daily event.
+ *
+ * A single failure stays FULLY VISIBLE in the /health body (status 'error', lastError, lastErrorAt) so
+ * it is diagnosable; it just does not declare the whole service down. Two in a row does, and genuine
+ * staleness (the job not running at all) still does immediately -- a dead cron is never noise.
+ */
+export const ERROR_STREAK_FOR_UNHEALTHY = 2
 
 class CronHealthTracker {
   private jobs = new Map<string, CronJobHealth>()
@@ -25,6 +48,8 @@ class CronHealthTracker {
       lastStarted: null,
       lastCompleted: null,
       lastError: null,
+      consecutiveFailures: 0,
+      lastErrorAt: null,
       staleSince: null,
       expectedIntervalMs,
     })
@@ -44,6 +69,10 @@ class CronHealthTracker {
     job.status = 'ok'
     job.lastCompleted = new Date().toISOString()
     job.lastError = null
+    // A success ends the streak. This is the only path back to healthy, which is exactly why a
+    // single failure must not have declared the service down for a daily job's whole interval.
+    job.consecutiveFailures = 0
+    job.lastErrorAt = null
   }
 
   fail(name: string, error: string): void {
@@ -52,6 +81,8 @@ class CronHealthTracker {
     job.status = 'error'
     job.lastError = error.slice(0, 500)
     job.lastCompleted = new Date().toISOString()
+    job.consecutiveFailures += 1
+    job.lastErrorAt = new Date().toISOString()
   }
 
   // Call periodically or on /health request. Logs STALE warnings to stderr.
@@ -80,10 +111,16 @@ class CronHealthTracker {
     return [...this.jobs.values()]
   }
 
-  // Returns false if any job is in error state or overdue.
+  // Unhealthy when a job has failed ERROR_STREAK_FOR_UNHEALTHY times IN A ROW, or is genuinely stale.
+  //
+  // A single failure is deliberately NOT unhealthy -- see ERROR_STREAK_FOR_UNHEALTHY for the incident.
+  // It remains fully visible in the /health body either way, so nothing is hidden; the difference is
+  // whether one blip on a once-daily job gets to declare the entire service down for 24 hours.
   isHealthy(): boolean {
     for (const job of this.jobs.values()) {
-      if (job.status === 'error') return false
+      if (job.consecutiveFailures >= ERROR_STREAK_FOR_UNHEALTHY) return false
+      // Staleness is never noise: a job that is not running at all is a real outage regardless of
+      // whether its last attempt happened to succeed.
       if (job.staleSince) return false
     }
     return true
