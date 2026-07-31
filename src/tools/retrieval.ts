@@ -25,7 +25,7 @@ export function buildRetrievalTools(store: VectorStore, embedder: Embedder) {
       const limit = args.limit ?? 10;
       const queryEmbedding = await embedder.embed(args.query);
 
-      const fmt = (chunks: Array<{ id: string; vault_path: string; chunk_text: string; prefixed_text: string | null; section: string | null; score: number; novelty_score: number }>, pool: 1 | 2 | 3 | 4) =>
+      const fmt = (chunks: Array<{ id: string; vault_path: string; chunk_text: string; prefixed_text: string | null; section: string | null; score: number; novelty_score: number; created_at?: string }>, pool: 1 | 2 | 3 | 4) =>
         chunks.map(chunk => ({
           // id enables sb_feedback ("that was useful/wrong") on recalled chunks (0070).
           id: chunk.id,
@@ -34,6 +34,12 @@ export function buildRetrievalTools(store: VectorStore, embedder: Embedder) {
           section: chunk.section ?? "",
           score: chunk.score,
           novelty_score: chunk.novelty_score,
+          // WHEN (2026-07-31). Omitted until now, so every consumer -- including the Discord bots'
+          // per-message recall -- received chunks it could not place in time and had no way to tell a
+          // June summary from last night's note. Ranking by recency is useless if the consumer still
+          // cannot SEE the date: the model has to be able to say "that was six weeks ago" rather than
+          // treating every fragment as equally current.
+          created_at: chunk.created_at ?? null,
           pool,
         }));
 

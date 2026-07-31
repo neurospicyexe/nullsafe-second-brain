@@ -2,6 +2,7 @@ import Database from "better-sqlite3";
 import * as sqliteVec from "sqlite-vec";
 import { randomUUID } from "crypto";
 import { emotionResonance } from "./emotion-space.js";
+import { recencyBoost, recencyWeight, recencyHalfLifeDays } from "./recency.js";
 
 export interface ChunkInsert {
   vault_path: string;
@@ -464,6 +465,15 @@ export class VectorStore {
     // gates recall; unknown/null labels get exactly 0. SB_RESONANCE_WEIGHT tunes; 0 disables.
     const resonanceWeight = Number(process.env.SB_RESONANCE_WEIGHT ?? 0.08);
 
+    // Recency (2026-07-31). Until now this formula had NO time term: `created_at` was in every row
+    // returned above and never scored, so a June chunk and a chunk from last night ranked identically
+    // at equal cosine. That is how "which episode did we watch last" surfaced a June note about
+    // having FINISHED the show. A BOOST for fresh, never a penalty for old -- old material must stay
+    // findable when Raziel reaches for it, so nothing ranks lower than it did before this term.
+    const recWeight = recencyWeight();
+    const recHalfLife = recencyHalfLifeDays();
+    const scoredAt = Date.now();
+
     return candidates
       .map(({ rowid, chunk }) => {
         const normV = ((vectorScores.get(rowid) ?? 0) - vMin) / vRange;
@@ -475,7 +485,8 @@ export class VectorStore {
         // Fresh chunks (0/0) get reliability 0.5 -> boost exactly 0.
         const reliability = (chunk.useful_count + 1) / (chunk.useful_count + chunk.useless_count + 2);
         const metamemory = 0.10 * (reliability - 0.5);
-        const score = 0.7 * normV + 0.3 * normB + resonance + metamemory;
+        const recency = recencyBoost(chunk.created_at, recWeight, recHalfLife, scoredAt);
+        const score = 0.7 * normV + 0.3 * normB + resonance + metamemory + recency;
         return { ...chunk, score };
       })
       .sort((a, b) => b.score - a.score)
