@@ -67,6 +67,38 @@ describe("cron health streak", () => {
     expect(cronHealth.isHealthy()).toBe(true);
   });
 
+  it("a job that RUNS AND FAILS forever cannot dodge both detectors (review finding 2026-07-31)", () => {
+    // The streak lives in memory and register() zeroes it on every boot, so a deploy or OOM between two
+    // daily failures reset the count -- and staleness keyed on lastStarted, which a failing job still
+    // updates. Neither detector could ever fire for a permanently broken once-a-day job.
+    //
+    // Staleness now keys on last SUCCESS, so it trips regardless of restarts or how often the job starts.
+    cronHealth.register("always_fails", 1);          // 1ms interval -> instantly overdue
+    cronHealth.start("always_fails");
+    cronHealth.fail("always_fails", "fetch failed");
+    // Simulate the restart that used to hide it: register() wipes the streak back to 0.
+    cronHealth.register("always_fails", 1);
+    cronHealth.start("always_fails");
+    cronHealth.fail("always_fails", "fetch failed");
+    const until = Date.now() + 20;
+    while (Date.now() < until) { /* let the 1ms interval lapse */ }
+    cronHealth.checkStale();
+    const job = cronHealth.getAll().find(j => j.name === "always_fails")!;
+    expect(job.lastSuccessAt).toBeNull();
+    expect(job.staleSince).toBeTruthy();
+    expect(cronHealth.isHealthy()).toBe(false);
+  });
+
+  it("a healthy job's success clears staleness and records lastSuccessAt", () => {
+    cronHealth.register("healthy", 60_000);
+    cronHealth.start("healthy");
+    cronHealth.complete("healthy");
+    cronHealth.checkStale();
+    const job = cronHealth.getAll().find(j => j.name === "healthy")!;
+    expect(job.lastSuccessAt).toBeTruthy();
+    expect(job.staleSince).toBeNull();
+  });
+
   it("STALENESS still trips it immediately -- a job that never runs is never noise", () => {
     // This is the case that must NOT be loosened. A single failure is ambiguous; a cron that stopped
     // firing is an outage whether or not its last attempt happened to succeed.

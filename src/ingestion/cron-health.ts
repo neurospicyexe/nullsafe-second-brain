@@ -14,6 +14,8 @@ export interface CronJobHealth {
   /** Consecutive failures. One is noise; a streak is a condition. See ERROR_STREAK_FOR_UNHEALTHY. */
   consecutiveFailures: number
   lastErrorAt: string | null
+  /** Last time the job actually SUCCEEDED. Staleness keys on this, not on lastStarted -- see checkStale. */
+  lastSuccessAt: string | null
   staleSince: string | null
   expectedIntervalMs: number
 }
@@ -50,6 +52,7 @@ class CronHealthTracker {
       lastError: null,
       consecutiveFailures: 0,
       lastErrorAt: null,
+      lastSuccessAt: null,
       staleSince: null,
       expectedIntervalMs,
     })
@@ -73,6 +76,7 @@ class CronHealthTracker {
     // single failure must not have declared the service down for a daily job's whole interval.
     job.consecutiveFailures = 0
     job.lastErrorAt = null
+    job.lastSuccessAt = job.lastCompleted
   }
 
   fail(name: string, error: string): void {
@@ -90,7 +94,18 @@ class CronHealthTracker {
     const now = Date.now()
     for (const job of this.jobs.values()) {
       if (job.status === 'never' || job.status === 'running') continue
-      const lastRun = job.lastStarted ? new Date(job.lastStarted).getTime() : 0
+      // Keys on last SUCCESS, not last START (2026-07-31, review finding). A job that runs and FAILS
+      // still updates lastStarted, so staleness could never trip for it -- leaving the consecutive-failure
+      // streak as the only detector, and that streak lives in memory and is reset to 0 by register() on
+      // every boot. A deploy or OOM between two daily failures therefore let a permanently broken 03:00
+      // job dodge the threshold forever: neither detector could ever fire.
+      //
+      // Anchoring to success closes it without persistence: a job that has not SUCCEEDED within 1.5x its
+      // interval is stale regardless of how many times it has started, or how many restarts have happened.
+      // A never-yet-succeeded job falls back to lastStarted so a genuinely new registration is not
+      // instantly branded stale.
+      const anchor = job.lastSuccessAt ?? job.lastStarted
+      const lastRun = anchor ? new Date(anchor).getTime() : 0
       const threshold = job.expectedIntervalMs * 1.5
       const overdue = now - lastRun > threshold
       if (overdue && !job.staleSince) {
