@@ -177,6 +177,11 @@ export function createServer(config: SecondBrainConfig) {
       { paths: z.array(z.string()) },
       (args) => system.sb_index_rebuild(args).then(ok));
 
+    server.tool("sb_index_drain",
+      "Re-index vault files that were written while the embedder was unavailable — they are readable but NOT searchable until drained. Runs automatically on every ingestion tick; call this to recover immediately (e.g. right after restoring API credits). sb_status shows the pending count.",
+      { limit: z.number().int().min(1).max(1000).optional() },
+      (args) => system.sb_index_drain(args).then(ok));
+
     server.tool("sb_read",
       "Read a vault file by path. Without query: returns full markdown text. With query: returns top 3 most relevant excerpts ranked by semantic similarity — use when a file is long and you only need the parts most relevant to a specific question.",
       { path: z.string(), query: z.string().max(10_000).optional() },

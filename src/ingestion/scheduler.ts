@@ -32,6 +32,11 @@ export function startIngestionScheduler(
 ): void {
   const pipeline = createPipeline(config, store, embedder)
 
+  // Drains `pending_index` on every ingestion tick: vault files that are durable but were never indexed
+  // because the embedder was down. Recovery must not depend on anyone REMEMBERING to run a command --
+  // anything you have to remember is a defect, and an unsearchable file is invisible by definition.
+  const drainIndexer = vault ? new Indexer(vault, embedder, store) : null
+
   // Register all jobs with expected intervals before any ticks fire.
   cronHealth.register('ingestion_pipeline', 20 * 60 * 1000)
   cronHealth.register('drift_evaluator', 6 * 60 * 60 * 1000)
@@ -61,6 +66,18 @@ export function startIngestionScheduler(
     cronHealth.start('ingestion_pipeline')
     try {
       await pipeline.run()
+
+      // Re-index anything that landed in the vault while the embedder was unavailable. Cheap when the queue
+      // is empty (one COUNT), self-limiting when it is not (drainPendingIndex stops at the first failure
+      // rather than hammering a dead paid API once per queued file).
+      if (drainIndexer) {
+        try {
+          await drainIndexer.drainPendingIndex(100)
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err)
+          console.error(`[ingestion] pending-index drain error: ${msg}`)
+        }
+      }
 
       // Gap detector runs after pipeline regardless of pipeline success.
       try {

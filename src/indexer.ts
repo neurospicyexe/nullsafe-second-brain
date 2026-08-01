@@ -113,19 +113,89 @@ export class Indexer {
     private store: VectorStore,
   ) {}
 
-  async write(options: WriteOptions): Promise<void> {
+  /**
+   * THE VAULT IS TRUTH; THE INDEX IS DERIVED.
+   *
+   * The vault write and the index insert used to be equally fatal, so when the embedder went down (OpenAI out
+   * of credits, 2026-08-01) every write through here reported FAILURE to its caller -- even though the file had
+   * already landed on the line above and was perfectly durable. Two bad consequences at once: callers saw
+   * data loss where there was none (and may retry, duplicating), and nothing anywhere recorded that the file
+   * still needed indexing, so it would never become searchable. `rebuildAll()` could not save it either -- it
+   * enumerates paths already IN the index.
+   *
+   * So an index failure no longer fails the write. It is recorded in `pending_index` and drained later. This
+   * is the same covenant the suite already states for Vectorize ("the index is rebuildable; D1 is truth") --
+   * it just had not been applied to the write path.
+   *
+   * NOT silent: the path is queued, counted in `sb_status`, and logged. A write that succeeded-but-unsearchable
+   * is a different fact from a write that succeeded, and the caller can see which it got.
+   */
+  async write(options: WriteOptions): Promise<{ indexed: boolean; pending_reason?: string }> {
     await this.adapter.write({
       path: options.path,
       content: options.content,
       overwrite: options.overwrite ?? true,
     });
-    await this.indexContent(
-      options.path,
-      options.content,
-      options.companion,
-      options.content_type,
-      options.tags,
-    );
+    try {
+      await this.indexContent(
+        options.path,
+        options.content,
+        options.companion,
+        options.content_type,
+        options.tags,
+      );
+      // A successful index supersedes any earlier failure for this path.
+      try { this.store.clearPendingIndex(options.path); } catch { /* non-fatal */ }
+      return { indexed: true };
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      console.error(`[indexer] wrote ${options.path} but indexing FAILED (queued for retry): ${reason}`);
+      try {
+        this.store.markPendingIndex(
+          options.path, options.companion ?? null, options.content_type ?? "note", options.tags ?? [], reason,
+        );
+      } catch (qErr) {
+        // If even the queue write fails, this IS data loss of the searchability signal -- say so loudly.
+        console.error(`[indexer] CRITICAL: could not queue ${options.path} for reindex: ${String(qErr)}`);
+      }
+      return { indexed: false, pending_reason: reason };
+    }
+  }
+
+  /**
+   * Retry everything that landed in the vault but never made it into the index.
+   *
+   * Called by the scheduler, so recovery from an embedder outage needs no human to remember anything --
+   * "anything you have to remember is a defect". Ordered oldest-first: the longest-unsearchable file is the
+   * one most likely to be reached for and missed.
+   */
+  async drainPendingIndex(limit = 100): Promise<{ attempted: number; recovered: number; still_pending: number }> {
+    const pending = this.store.listPendingIndex(limit);
+    if (pending.length === 0) return { attempted: 0, recovered: 0, still_pending: 0 };
+
+    let recovered = 0;
+    for (const p of pending) {
+      try {
+        const content = await this.adapter.read(p.vault_path);
+        await this.indexContent(p.vault_path, content, p.companion, p.content_type as ContentType, p.tags);
+        this.store.clearPendingIndex(p.vault_path);
+        recovered++;
+      } catch (err) {
+        // Still failing (embedder still down, or the file is gone). Leave it queued; bump the attempt count.
+        this.store.markPendingIndex(
+          p.vault_path, p.companion, p.content_type, p.tags,
+          err instanceof Error ? err.message : String(err),
+        );
+        // First failure of the batch is almost always "embedder still down" -- stop rather than hammering a
+        // dead paid API once per queued file.
+        break;
+      }
+    }
+    const stillPending = this.store.pendingIndexCount();
+    if (recovered > 0 || stillPending > 0) {
+      console.log(`[indexer] drainPendingIndex: recovered=${recovered} still_pending=${stillPending}`);
+    }
+    return { attempted: pending.length, recovered, still_pending: stillPending };
   }
 
   async reindex(vaultPath: string): Promise<void> {

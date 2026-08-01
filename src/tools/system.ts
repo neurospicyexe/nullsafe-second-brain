@@ -15,11 +15,27 @@ export function buildSystemTools(store: VectorStore, indexer: Indexer, adapter: 
     async sb_status() {
       const chunks = store.getAll();
       const companions = [...new Set(chunks.map(c => c.companion).filter((c): c is string => c !== null))];
+      // `pending_index` = vault files that are DURABLE but NOT SEARCHABLE (written while the embedder was
+      // down). Surfaced here because an unsearchable file is invisible by definition -- if the count is not
+      // shown somewhere, nobody learns the memory has a hole until they reach for something and miss.
+      const pendingIndex = store.pendingIndexCount();
+      const pendingSample = pendingIndex > 0 ? store.listPendingIndex(3) : [];
       return {
         total_chunks: chunks.length,
         companions_indexed: companions,
         content_types: [...new Set(chunks.map(c => c.content_type))],
+        ...(pendingIndex > 0 ? {
+          pending_index: pendingIndex,
+          pending_index_note: "Written to the vault but not indexed (embedder unavailable). Readable now, NOT searchable until drained; retries automatically.",
+          pending_index_oldest: pendingSample[0]?.first_failed_at ?? null,
+          pending_index_sample: pendingSample.map(p => p.vault_path),
+        } : {}),
       };
+    },
+
+    /** Manual drain, for when credits land and you would rather not wait for the next cron tick. */
+    async sb_index_drain(args: { limit?: number }) {
+      return indexer.drainPendingIndex(args.limit ?? 100);
     },
 
     async sb_index_rebuild(args: { paths: string[] }) {

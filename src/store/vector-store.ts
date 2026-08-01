@@ -169,6 +169,75 @@ export class VectorStore {
   // is killed mid-rebuild the checkpoint survives, initialize() emits a recovery warning,
   // and the operator knows to re-run `npm run rebuild`.
 
+  // ── Pending-index queue ────────────────────────────────────────────────────────────────────────────
+  //
+  // THE HOLE THIS PLUGS (2026-08-01). `Indexer.write()` writes the vault file FIRST and embeds SECOND. When
+  // the embedder is down the file lands and is durable, but the index insert throws -- and NOTHING recorded
+  // that the file still needed indexing. `rebuildAll()` cannot recover it either: it enumerates
+  // `distinctPaths()`, i.e. paths ALREADY in the index, so a file that was never indexed is invisible to the
+  // one tool built to fix the index. A week-long embedder outage would therefore have left a permanent,
+  // silent hole in the long-term memory: the writing kept succeeding, the searching just quietly never
+  // included it.
+  //
+  // Deliberately its own tiny table rather than a flag on `embeddings`: there is no embeddings row to flag.
+  // That absence IS the bug.
+
+  markPendingIndex(vaultPath: string, companion: string | null, contentType: string, tags: string[], reason: string): void {
+    this.db.prepare(`
+      CREATE TABLE IF NOT EXISTS pending_index (
+        vault_path TEXT PRIMARY KEY,
+        companion TEXT,
+        content_type TEXT,
+        tags TEXT,
+        reason TEXT,
+        first_failed_at TEXT NOT NULL,
+        attempts INTEGER NOT NULL DEFAULT 1,
+        last_attempt_at TEXT NOT NULL
+      )
+    `).run();
+    const now = new Date().toISOString();
+    // ON CONFLICT keeps first_failed_at (how long has this been unsearchable?) and counts attempts, so a
+    // path stuck for days is distinguishable from one that failed once.
+    this.db.prepare(`
+      INSERT INTO pending_index (vault_path, companion, content_type, tags, reason, first_failed_at, attempts, last_attempt_at)
+      VALUES (?, ?, ?, ?, ?, ?, 1, ?)
+      ON CONFLICT(vault_path) DO UPDATE SET
+        attempts = attempts + 1, last_attempt_at = excluded.last_attempt_at, reason = excluded.reason
+    `).run(vaultPath, companion, contentType, JSON.stringify(tags ?? []), reason.slice(0, 300), now, now);
+  }
+
+  listPendingIndex(limit = 500): Array<{ vault_path: string; companion: string | null; content_type: string; tags: string[]; reason: string; first_failed_at: string; attempts: number }> {
+    if (!this.tableExists("pending_index")) return [];
+    const rows = this.db.prepare(
+      "SELECT vault_path, companion, content_type, tags, reason, first_failed_at, attempts FROM pending_index ORDER BY first_failed_at ASC LIMIT ?"
+    ).all(limit) as Array<Record<string, unknown>>;
+    return rows.map(r => ({
+      vault_path: r.vault_path as string,
+      companion: (r.companion as string | null) ?? null,
+      content_type: (r.content_type as string) ?? "note",
+      tags: (() => { try { return JSON.parse((r.tags as string) ?? "[]") as string[]; } catch { return []; } })(),
+      reason: (r.reason as string) ?? "",
+      first_failed_at: r.first_failed_at as string,
+      attempts: Number(r.attempts ?? 0),
+    }));
+  }
+
+  clearPendingIndex(vaultPath: string): void {
+    if (!this.tableExists("pending_index")) return;
+    this.db.prepare("DELETE FROM pending_index WHERE vault_path = ?").run(vaultPath);
+  }
+
+  /** Count of vault files that are durable but NOT searchable. Surfaced in sb_status so it is visible. */
+  pendingIndexCount(): number {
+    if (!this.tableExists("pending_index")) return 0;
+    const row = this.db.prepare("SELECT COUNT(*) AS n FROM pending_index").get() as { n: number } | undefined;
+    return Number(row?.n ?? 0);
+  }
+
+  private tableExists(name: string): boolean {
+    return this.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(name) !== undefined;
+  }
+
   saveRebuildCheckpoint(): void {
     this.db.prepare("DROP TABLE IF EXISTS embeddings_rebuild_checkpoint").run();
     this.db.prepare(`
