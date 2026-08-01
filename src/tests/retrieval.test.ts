@@ -282,7 +282,10 @@ describe("sb_search", () => {
 
     expect(store.hybridSearch).not.toHaveBeenCalled();
     expect(store.searchByContentType).toHaveBeenCalledWith([0.1, 0.2, 0.3], "historical_corpus", 5);
-    expect(result.scoped_content_type).toBe("historical_corpus");
+    // `in` narrows the scoped vs unscoped return union (both now carry an optional `degraded`).
+    expect("scoped_content_type" in result && result.scoped_content_type).toBe("historical_corpus");
+    // Healthy path must NOT advertise degradation -- the field is absent, not false.
+    expect("degraded" in result).toBe(false);
     expect(result.chunks).toHaveLength(1);
     expect(result.chunks[0].vault_path).toBe(corpus.vault_path);
   });

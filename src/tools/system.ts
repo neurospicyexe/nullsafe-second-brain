@@ -33,17 +33,38 @@ export function buildSystemTools(store: VectorStore, indexer: Indexer, adapter: 
       if (args.query) {
         const chunks = store.filterByPath(args.path);
         if (chunks.length > 0) {
-          const queryEmbedding = await embedder.embed(args.query);
-          const ranked = chunks
-            .map(chunk => ({
-              section: chunk.section ?? "",
-              text: chunk.chunk_text,
-              score: cosineSimilarity(queryEmbedding, chunk.embedding),
-            }))
-            .sort((a, b) => b.score - a.score)
-            .slice(0, 3)
-            .map(({ section, text }) => ({ section, text }));
-          return { path: args.path, mode: "excerpts" as const, excerpts: ranked };
+          // Excerpt mode is PURE cosine ranking, so a dead embedder leaves nothing to rank with. Degrade to
+          // returning the whole file (below) rather than to three excerpts picked by a broken ranker: the
+          // caller asked for the relevant parts of a file, and all of it is a truthful superset of that.
+          // Reading a vault file must never depend on a paid remote service being funded.
+          let queryEmbedding: number[] | null = null;
+          try {
+            queryEmbedding = await embedder.embed(args.query);
+          } catch (err) {
+            console.error(`[sb_read] embedder unavailable, returning full file instead of excerpts: ${(err as Error).message}`);
+          }
+          if (queryEmbedding) {
+            const qe = queryEmbedding;
+            const ranked = chunks
+              .map(chunk => ({
+                section: chunk.section ?? "",
+                text: chunk.chunk_text,
+                score: cosineSimilarity(qe, chunk.embedding),
+              }))
+              .sort((a, b) => b.score - a.score)
+              .slice(0, 3)
+              .map(({ section, text }) => ({ section, text }));
+            return { path: args.path, mode: "excerpts" as const, excerpts: ranked };
+          }
+          // Embedder down -> fall through to the full-file read below, and SAY so, because the caller asked
+          // for excerpts and is getting something different.
+          const content = await adapter.read(args.path);
+          return {
+            path: args.path,
+            content,
+            degraded: "full_file_no_ranker" as const,
+            degraded_note: "Embedder unavailable: returning the whole file instead of the 3 most relevant excerpts.",
+          };
         }
       }
       const content = await adapter.read(args.path);

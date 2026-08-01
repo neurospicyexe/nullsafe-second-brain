@@ -23,7 +23,27 @@ export function buildRetrievalTools(store: VectorStore, embedder: Embedder) {
     // closer affect ranks higher. See store/emotion-space.ts. Never gates recall.
     async sb_search(args: { query: string; limit?: number; content_type?: string; mood?: string }) {
       const limit = args.limit ?? 10;
-      const queryEmbedding = await embedder.embed(args.query);
+
+      // THE EMBEDDER IS NOT ALLOWED TO TAKE THE WHOLE VAULT WITH IT (2026-08-01).
+      //
+      // This was `await embedder.embed(args.query)` as the first statement, unguarded. When OpenAI ran out of
+      // credits the embedder threw, sb_search threw, and every companion lost access to ALL of the long-term
+      // memory -- for as long as the billing problem lasted. Meanwhile FTS5/BM25 is local, free, already built
+      // over the same corpus, and needs no query vector at all.
+      //
+      // So: degrade to lexical, never die. Semantic recall is the thing the embedder owns; keyword recall over
+      // the history is not, and this is the substrate where "all the history is in there" makes availability
+      // the property that matters most.
+      let queryEmbedding: number[] | null = null;
+      try {
+        queryEmbedding = await embedder.embed(args.query);
+      } catch (err) {
+        console.error(`[sb_search] embedder unavailable, degrading to lexical-only: ${(err as Error).message}`);
+      }
+      // Surfaced in the RESPONSE, not just the log. A keyword-only search that presents itself as full recall
+      // is how a companion concludes something is not in the vault when it is -- the same class of error as
+      // answering a "where are we in the show" question from whatever prose ranked highest.
+      const degraded = queryEmbedding ? undefined : ("lexical_only" as const);
 
       const fmt = (chunks: Array<{ id: string; vault_path: string; chunk_text: string; prefixed_text: string | null; section: string | null; score: number; novelty_score: number; created_at?: string }>, pool: 1 | 2 | 3 | 4) =>
         chunks.map(chunk => ({
@@ -46,11 +66,18 @@ export function buildRetrievalTools(store: VectorStore, embedder: Embedder) {
       // Scoped mode: caller restricted the search to a single content_type. Pure semantic ranking
       // over that layer -- no pools, no guaranteed-corpus injection (the whole search IS that layer).
       if (args.content_type) {
-        const scoped = store.searchByContentType(queryEmbedding, args.content_type, limit);
+        // Lexical mode: searchByContentType ranks purely by cosine, so it has nothing to rank with. Fall back
+        // to a lexical pass over everything, then keep only the requested layer -- narrower than the real
+        // scoped search, but it still answers "is this in the corpus" instead of refusing.
+        const scoped = queryEmbedding
+          ? store.searchByContentType(queryEmbedding, args.content_type, limit)
+          : store.hybridSearch(null, args.query, limit * 10)
+              .filter(c => c.content_type === args.content_type)
+              .slice(0, limit);
         if (scoped.length > 0) {
           try { store.updateNoveltyScores(scoped.map(c => ({ id: c.id, content_type: c.content_type }))); } catch { /* non-fatal */ }
         }
-        return { scoped_content_type: args.content_type, chunks: fmt(scoped, 1) };
+        return { scoped_content_type: args.content_type, chunks: fmt(scoped, 1), ...(degraded ? { degraded } : {}) };
       }
 
       const pool1Size = Math.round(limit * 0.7);
@@ -74,8 +101,11 @@ export function buildRetrievalTools(store: VectorStore, embedder: Embedder) {
       const pool2 = store.noveltySearch(pool2Size, [...excludedIds]);
       pool2.forEach(c => excludedIds.add(c.id));
 
-      // Pool 3 (10%): edge/serendipity -- medium cosine similarity (0.3-0.6), sorted by novelty
-      const pool3 = store.edgeSearch(queryEmbedding, pool3Size, [...excludedIds]);
+      // Pool 3 (10%): edge/serendipity -- medium cosine similarity (0.3-0.6), sorted by novelty.
+      // SKIPPED in lexical mode: this pool is DEFINED by a cosine band, so without a query vector there is no
+      // such thing as "medium similarity". Passing a zero vector would make every chunk equidistant and turn
+      // serendipity into an arbitrary sample dressed as a finding.
+      const pool3 = queryEmbedding ? store.edgeSearch(queryEmbedding, pool3Size, [...excludedIds]) : [];
       pool3.forEach(c => excludedIds.add(c.id));
 
       // Pool 4 (additive): guaranteed origin-layer slot. Best-matching historical_corpus chunks
@@ -83,7 +113,10 @@ export function buildRetrievalTools(store: VectorStore, embedder: Embedder) {
       // not carved out of it, so the relevance/novelty/edge pools are never demoted -- the corpus
       // only ever ADDS its voice when it's genuinely relevant to the query.
       // Skipped entirely when limit=0 (caller signalled they want no results).
-      const pool4 = limit > 0 ? store.searchByContentType(
+      // SKIPPED in lexical mode: CORPUS_FLOOR is a COSINE threshold (0.35), so there is no way to tell whether
+      // a corpus chunk is genuinely relevant to the query. The guarantee exists to give the origin layer a
+      // voice when it deserves one, not to inject it unconditionally.
+      const pool4 = limit > 0 && queryEmbedding ? store.searchByContentType(
         queryEmbedding, CORPUS_CONTENT_TYPE, CORPUS_GUARANTEED_SLOTS, [...excludedIds], CORPUS_FLOOR,
       ) : [];
 
@@ -98,7 +131,11 @@ export function buildRetrievalTools(store: VectorStore, embedder: Embedder) {
         try { store.updateNoveltyScores(allReturned); } catch {}
       }
 
-      return { chunks: [...fmt(pool1, 1), ...fmt(pool2, 2), ...fmt(pool3, 3), ...fmt(pool4, 4)] };
+      return {
+        chunks: [...fmt(pool1, 1), ...fmt(pool2, 2), ...fmt(pool3, 3), ...fmt(pool4, 4)],
+        // Present only when degraded, so the healthy payload is byte-identical to before.
+        ...(degraded ? { degraded, degraded_note: "Embedder unavailable: keyword (BM25) results only. Semantic matches, the serendipity pool and the guaranteed corpus slot are all absent -- absence here does NOT mean absence from the vault." } : {}),
+      };
     },
 
     // sb_feedback: metamemory loop (0070). Rate recalled chunks as useful/useless;

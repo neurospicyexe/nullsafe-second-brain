@@ -406,7 +406,19 @@ export class VectorStore {
     this.vecDim = null;
   }
 
-  hybridSearch(queryEmbedding: number[], queryText: string, limit: number, mood?: string): Array<ChunkRow & { score: number }> {
+  /**
+   * `queryEmbedding` may be NULL: lexical-only mode (2026-08-01).
+   *
+   * The embedder is a PAID, remote single point of failure sitting in front of a lexical index that does not
+   * need it. When OpenAI ran out of credits, `sb_search` threw on its first line and every companion lost
+   * access to the entire vault -- while FTS5/BM25, which is local and free and already built over the same
+   * corpus, would have answered fine. "All the history is in there" makes availability the property that
+   * matters most, so a dead embedder must cost the semantic half of search and nothing else.
+   *
+   * In lexical mode: no ANN candidates, no cosine term (normV contributes 0), BM25 carries the ranking, and
+   * the recency / resonance / metamemory nudges still apply because none of them need a query vector.
+   */
+  hybridSearch(queryEmbedding: number[] | null, queryText: string, limit: number, mood?: string): Array<ChunkRow & { score: number }> {
     // Step 1: BM25 candidates via FTS5 index — sub-millisecond, avoids full table scan.
     // OR-join the query tokens (with prefix) rather than the default implicit-AND phrase match:
     // a natural-language query no longer needs EVERY token present in one chunk to surface
@@ -426,8 +438,14 @@ export class VectorStore {
     // the vec0 index, not the old arbitrary novelty-ordered sample. Both sets are re-ranked by the
     // same cosine+BM25 scoring below, so unioning only improves recall.
     const bm25Rowids = [...bm25Scores.keys()];
-    const annHits = this.vectorSearch(queryEmbedding, Math.max(limit * 5, 50));
+    const annHits = queryEmbedding ? this.vectorSearch(queryEmbedding, Math.max(limit * 5, 50)) : [];
     const candidateRowids = new Set<number>([...bm25Rowids, ...annHits.map(h => h.rowid)]);
+
+    // LEXICAL MODE WITH NO KEYWORD HITS MEANS NO RESULTS -- not "here are 500 rows".
+    // The novelty-ordered fallback below exists for "the ANN extension is missing but we still have a query
+    // vector to re-rank with". Reaching it with neither a vector nor a lexical hit would hand back 500
+    // arbitrary rows that a companion reads as recall. An honest empty beats confident noise.
+    if (!queryEmbedding && candidateRowids.size === 0) return [];
 
     let rows: Record<string, unknown>[];
     if (candidateRowids.size > 0) {
@@ -448,8 +466,11 @@ export class VectorStore {
 
     // Step 3: Cosine-score candidates and combine with BM25.
     const candidates = rows.map(r => ({ rowid: r.rowid as number, chunk: this.deserialize(r) }));
+    // Lexical mode: every cosine is 0, so normV below is a constant and BM25 + the nudges do the ranking.
+    // Deliberately NOT a zero vector passed to cosineSimilarity -- that would make every chunk equidistant
+    // while still LOOKING like a similarity score to anything downstream.
     const vectorScores = new Map(candidates.map(({ rowid, chunk }) =>
-      [rowid, this.cosineSimilarity(queryEmbedding, chunk.embedding)]
+      [rowid, queryEmbedding ? this.cosineSimilarity(queryEmbedding, chunk.embedding) : 0]
     ));
 
     const vVals = [...vectorScores.values()];
