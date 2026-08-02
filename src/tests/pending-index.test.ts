@@ -157,4 +157,44 @@ describe("Indexer.drainPendingIndex -- recovery needs nobody to remember", () =>
     const r = await indexer.drainPendingIndex();
     expect(r).toEqual({ attempted: 0, recovered: 0, still_pending: 0 });
   });
+
+  it("a MISSING FILE does not block the rest of the queue -- the poison-pill guard", async () => {
+    // Before this guard, drainPendingIndex broke on the FIRST failure. Right for "embedder still down";
+    // catastrophic for a path whose vault file was deleted or renamed -- that entry throws forever, sits at
+    // the head of an oldest-first list, and permanently blocks every other queued file from draining, even
+    // after the embedder recovers. pending_index would never clear and sb_status would report a hole that
+    // could never close.
+    const { store, adapter, embedder, restoreEmbedder } = setup({ embedderFails: true });
+    const indexer = new Indexer(adapter, embedder, store);
+    await indexer.write({ path: "gone.md", content: "x", companion: null, content_type: "note", tags: [] });
+    await indexer.write({ path: "fine.md", content: "y", companion: null, content_type: "note", tags: [] });
+    expect(store.pendingIndexCount()).toBe(2);
+
+    restoreEmbedder();
+    // gone.md can no longer be read; fine.md can.
+    vi.mocked(adapter.read).mockImplementation(async (path: string) => {
+      if (path === "gone.md") throw new Error("ENOENT: no such file or directory");
+      return "recovered body";
+    });
+
+    const r = await indexer.drainPendingIndex();
+
+    expect(r.recovered).toBe(1);                       // fine.md drained past the bad head entry
+    expect(store.listPendingIndex().map(p => p.vault_path)).toEqual(["gone.md"]);
+  });
+
+  it("an EMBEDDER failure still stops the tick -- one dead-API call, not one per queued file", async () => {
+    const { store, adapter, embedder } = setup({ embedderFails: true });
+    const indexer = new Indexer(adapter, embedder, store);
+    for (const p of ["a.md", "b.md", "c.md"]) {
+      await indexer.write({ path: p, content: p, companion: null, content_type: "note", tags: [] });
+    }
+    vi.mocked(embedder.embed).mockClear();
+    vi.mocked(embedder.embedBatch as unknown as ReturnType<typeof vi.fn>).mockClear();
+
+    const r = await indexer.drainPendingIndex();
+
+    expect(r.recovered).toBe(0);
+    expect(store.pendingIndexCount()).toBe(3);        // nothing dropped -- an outage must never lose a path
+  });
 });

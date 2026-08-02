@@ -106,6 +106,10 @@ export function contextPrefix(meta: { path: string; companion: string | null; co
   return `${parts.join(" | ")}:${sectionLine}\n`;
 }
 
+/** After this many failed attempts, a path whose FILE cannot be read is dropped from the queue rather than
+ *  blocking it forever. Only applies to missing-file errors -- an embedder outage must never drop anything. */
+const MAX_PENDING_ATTEMPTS = 5;
+
 export class Indexer {
   constructor(
     private adapter: VaultAdapter,
@@ -181,13 +185,26 @@ export class Indexer {
         this.store.clearPendingIndex(p.vault_path);
         recovered++;
       } catch (err) {
-        // Still failing (embedder still down, or the file is gone). Leave it queued; bump the attempt count.
-        this.store.markPendingIndex(
-          p.vault_path, p.companion, p.content_type, p.tags,
-          err instanceof Error ? err.message : String(err),
-        );
-        // First failure of the batch is almost always "embedder still down" -- stop rather than hammering a
-        // dead paid API once per queued file.
+        const reason = err instanceof Error ? err.message : String(err);
+        // Still failing. Leave it queued; bump the attempt count.
+        this.store.markPendingIndex(p.vault_path, p.companion, p.content_type, p.tags, reason);
+
+        // POISON PILL GUARD (2026-08-02). This used to `break` unconditionally on the first failure, which
+        // is right for "the embedder is still down" -- do not hammer a dead paid API once per queued file --
+        // and catastrophic for a path whose vault file was since deleted or renamed. That entry throws
+        // forever, sits at the head of an oldest-first list, and permanently blocks every other queued file
+        // from draining, INCLUDING after the embedder recovers. `pending_index` would then never clear and
+        // sb_status would report a hole that can never close.
+        //
+        // So: distinguish the two. A file we cannot READ is this entry's problem -- skip past it and keep
+        // draining. Anything else (embedder, network) is everyone's problem -- stop for this tick.
+        const missingFile = /ENOENT|not found|no such file|404/i.test(reason);
+        if (missingFile && p.attempts + 1 >= MAX_PENDING_ATTEMPTS) {
+          console.error(`[indexer] dropping ${p.vault_path} from pending_index after ${p.attempts + 1} attempts: ${reason}`);
+          this.store.clearPendingIndex(p.vault_path);
+          continue;
+        }
+        if (missingFile) continue;
         break;
       }
     }
