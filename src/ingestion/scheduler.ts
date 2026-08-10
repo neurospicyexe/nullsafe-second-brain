@@ -79,6 +79,48 @@ export function startIngestionScheduler(
         }
       }
 
+      // Drain `pending_embed`: live Discord messages accepted while the embedder was down. Unlike
+      // pending_index these have NO vault file to re-read, so the queue carries the text itself and this
+      // is the only thing that can ever make them searchable. Same cadence, same "stop at the first
+      // embedder failure rather than hammering a dead paid API" discipline.
+      try {
+        const pend = store.listPendingEmbed(200)
+        if (pend.length > 0) {
+          let recovered = 0
+          for (const p of pend) {
+            try {
+              const [embedding] = await embedder.embedBatch([p.prefixed_text])
+              if (!embedding) throw new Error('embedder returned no vector')
+              store.insert({
+                vault_path: p.vault_path,
+                companion: p.companion,
+                content_type: p.content_type as Parameters<typeof store.insert>[0]['content_type'],
+                chunk_text: p.chunk_text,
+                prefixed_text: p.prefixed_text,
+                section: p.section,
+                chunk_index: 0,
+                embedding,
+                tags: p.tags,
+              })
+              store.clearPendingEmbed(p.vault_path)
+              recovered++
+            } catch (err) {
+              // Embedder still down. Leave the rest queued -- do NOT burn one paid call per queued row.
+              console.warn(
+                `[ingestion] pending-embed drain stopped after ${recovered} recovered, ` +
+                `${pend.length - recovered} still queued: ${err instanceof Error ? err.message : String(err)}`,
+              )
+              break
+            }
+          }
+          if (recovered > 0) {
+            console.log(`[ingestion] pending-embed drain: recovered=${recovered} still_queued=${store.pendingEmbedCount()}`)
+          }
+        }
+      } catch (err) {
+        console.error(`[ingestion] pending-embed drain error: ${err instanceof Error ? err.message : String(err)}`)
+      }
+
       // Gap detector runs after pipeline regardless of pipeline success.
       try {
         await runGapDetector(config)

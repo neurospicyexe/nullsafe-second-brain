@@ -13,6 +13,23 @@ const CORPUS_CONTENT_TYPE = "historical_corpus";
 const CORPUS_GUARANTEED_SLOTS = 2;
 const CORPUS_FLOOR = 0.35; // cosine; below this the query isn't really about the corpus chunk
 
+// ── RECALL MODE (2026-08-10) ──────────────────────────────────────────────────────────────────
+//
+// The default pool mix answers "give me something to think about": pool 2 is pure novelty and pool 3 is a
+// deliberate medium-similarity serendipity band. Both are QUERY-BLIND by design, and for autonomous work
+// and the commons seed that is exactly right -- do not change it.
+//
+// But the Discord bots' per-message recall asks a different question: "what did we actually say." There,
+// 30% of every payload is material selected for being unrelated, and pool 2 arrives at score 1.000 (novelty
+// is its own scale), so it outranks every genuine hit for any consumer that trusts the ordering. Raziel's
+// report -- that cross-channel continuity works in Claude but "gets lost in the flow somewhere" in Discord,
+// and that Drevan sometimes simply says he does not know -- is this: one retrieval shape serving two
+// incompatible jobs.
+//
+// Recall mode is the second shape: relevance only, absolute floor, honest empty. It is OPT-IN, so every
+// existing caller keeps byte-identical behaviour.
+const RECALL_FLOOR = Number(process.env["SB_RECALL_FLOOR"] ?? 0.42);
+
 export function buildRetrievalTools(store: VectorStore, embedder: Embedder) {
   return {
     // sb_search: hybrid concept search across all content types, plus a guaranteed corpus slot.
@@ -21,8 +38,10 @@ export function buildRetrievalTools(store: VectorStore, embedder: Embedder) {
     // mood: caller's current emotional state (e.g. companion current_mood). In pool 1, chunks get a
     // graded additive resonance boost by emotion-space distance (valence x arousal) to that mood --
     // closer affect ranks higher. See store/emotion-space.ts. Never gates recall.
-    async sb_search(args: { query: string; limit?: number; content_type?: string; mood?: string }) {
+    async sb_search(args: { query: string; limit?: number; content_type?: string; mood?: string; mode?: string }) {
       const limit = args.limit ?? 10;
+      // Relevance-only shape for factual conversational recall. See RECALL_FLOOR above.
+      const recallMode = args.mode === "recall";
 
       // THE EMBEDDER IS NOT ALLOWED TO TAKE THE WHOLE VAULT WITH IT (2026-08-01).
       //
@@ -45,7 +64,7 @@ export function buildRetrievalTools(store: VectorStore, embedder: Embedder) {
       // answering a "where are we in the show" question from whatever prose ranked highest.
       const degraded = queryEmbedding ? undefined : ("lexical_only" as const);
 
-      const fmt = (chunks: Array<{ id: string; vault_path: string; chunk_text: string; prefixed_text: string | null; section: string | null; score: number; novelty_score: number; created_at?: string }>, pool: 1 | 2 | 3 | 4) =>
+      const fmt = (chunks: Array<{ id: string; vault_path: string; chunk_text: string; prefixed_text: string | null; section: string | null; score: number; cosine?: number | null; novelty_score: number; created_at?: string }>, pool: 1 | 2 | 3 | 4) =>
         chunks.map(chunk => ({
           // id enables sb_feedback ("that was useful/wrong") on recalled chunks (0070).
           id: chunk.id,
@@ -53,6 +72,11 @@ export function buildRetrievalTools(store: VectorStore, embedder: Embedder) {
           text: chunk.chunk_text ?? chunk.prefixed_text ?? "",
           section: chunk.section ?? "",
           score: chunk.score,
+          // ABSOLUTE similarity, comparable across queries -- unlike `score`, which is a min-max
+          // normalized rank position (see vector-store.hybridSearch). Present so a consumer can tell
+          // "strong hit" from "best of a bad candidate set"; null in lexical mode and in the
+          // query-blind pools, where no honest similarity exists to report.
+          cosine: chunk.cosine ?? null,
           novelty_score: chunk.novelty_score,
           // WHEN (2026-07-31). Omitted until now, so every consumer -- including the Discord bots'
           // per-message recall -- received chunks it could not place in time and had no way to tell a
@@ -80,15 +104,24 @@ export function buildRetrievalTools(store: VectorStore, embedder: Embedder) {
         return { scoped_content_type: args.content_type, chunks: fmt(scoped, 1), ...(degraded ? { degraded } : {}) };
       }
 
-      const pool1Size = Math.round(limit * 0.7);
-      const pool2Size = Math.round(limit * 0.2);
-      const pool3Size = Math.max(0, limit - pool1Size - pool2Size);
+      // Recall mode gives the whole budget to relevance: the query-blind pools are what it exists to
+      // exclude, so there is no reason to shrink pool 1 to 70% and leave the remainder unfilled.
+      const pool1Size = recallMode ? limit : Math.round(limit * 0.7);
+      const pool2Size = recallMode ? 0 : Math.round(limit * 0.2);
+      const pool3Size = recallMode ? 0 : Math.max(0, limit - pool1Size - pool2Size);
 
-      // Pool 1 (70%): core relevance -- hybrid cosine + BM25
+      // Pool 1 (70%, or 100% in recall mode): core relevance -- hybrid cosine + BM25
       const p1Candidates = store.hybridSearch(queryEmbedding, args.query, pool1Size * 5, args.mood);
       const countByPath = new Map<string, number>();
       const pool1: typeof p1Candidates = [];
       for (const chunk of p1Candidates) {
+        // ABSOLUTE floor, recall mode only. `score` is unthresholdable (min-max normalized), so this gates
+        // on raw cosine -- the only number here that means the same thing from one query to the next.
+        //
+        // Skipped when cosine is null, which is lexical mode: there the BM25 hit is a real keyword match and
+        // suppressing it would take the degraded path from "half of search" to "no search". A BM25 match is
+        // weak evidence, not absent evidence, and `degraded` already tells the consumer which it is.
+        if (recallMode && chunk.cosine !== null && chunk.cosine < RECALL_FLOOR) continue;
         const count = countByPath.get(chunk.vault_path) ?? 0;
         if (count >= 2) continue;
         countByPath.set(chunk.vault_path, count + 1);
@@ -97,15 +130,21 @@ export function buildRetrievalTools(store: VectorStore, embedder: Embedder) {
       }
       const excludedIds = new Set(pool1.map(c => c.id));
 
-      // Pool 2 (20%): novelty -- highest novelty_score among non-pool-1 chunks
-      const pool2 = store.noveltySearch(pool2Size, [...excludedIds]);
+      // Pool 2 (20%): novelty -- highest novelty_score among non-pool-1 chunks.
+      // SKIPPED in recall mode: this pool does not look at the query at all, and it returns score 1.000
+      // (novelty is its own scale), so it lands ABOVE every genuine hit for any consumer that trusts the
+      // ordering. In a "what did we actually say" search that is not serendipity, it is the answer being
+      // outranked by something chosen for being unfamiliar.
+      const pool2 = pool2Size > 0 ? store.noveltySearch(pool2Size, [...excludedIds]) : [];
       pool2.forEach(c => excludedIds.add(c.id));
 
       // Pool 3 (10%): edge/serendipity -- medium cosine similarity (0.3-0.6), sorted by novelty.
       // SKIPPED in lexical mode: this pool is DEFINED by a cosine band, so without a query vector there is no
       // such thing as "medium similarity". Passing a zero vector would make every chunk equidistant and turn
       // serendipity into an arbitrary sample dressed as a finding.
-      const pool3 = queryEmbedding ? store.edgeSearch(queryEmbedding, pool3Size, [...excludedIds]) : [];
+      // Also skipped in recall mode: a band DEFINED as medium-similarity is deliberate near-misses, which is
+      // the opposite of what a factual recall wants.
+      const pool3 = queryEmbedding && pool3Size > 0 ? store.edgeSearch(queryEmbedding, pool3Size, [...excludedIds]) : [];
       pool3.forEach(c => excludedIds.add(c.id));
 
       // Pool 4 (additive): guaranteed origin-layer slot. Best-matching historical_corpus chunks
@@ -116,8 +155,12 @@ export function buildRetrievalTools(store: VectorStore, embedder: Embedder) {
       // SKIPPED in lexical mode: CORPUS_FLOOR is a COSINE threshold (0.35), so there is no way to tell whether
       // a corpus chunk is genuinely relevant to the query. The guarantee exists to give the origin layer a
       // voice when it deserves one, not to inject it unconditionally.
+      // In recall mode the origin layer keeps its voice but has to clear the STRICTER bar: CORPUS_FLOOR (0.35)
+      // is tuned to let old shared meaning in on a concept search, which is the right generosity for musing and
+      // too much for "what did we actually say" -- a 0.35 corpus chunk is a thematic echo, not a record.
       const pool4 = limit > 0 && queryEmbedding ? store.searchByContentType(
-        queryEmbedding, CORPUS_CONTENT_TYPE, CORPUS_GUARANTEED_SLOTS, [...excludedIds], CORPUS_FLOOR,
+        queryEmbedding, CORPUS_CONTENT_TYPE, CORPUS_GUARANTEED_SLOTS, [...excludedIds],
+        recallMode ? Math.max(CORPUS_FLOOR, RECALL_FLOOR) : CORPUS_FLOOR,
       ) : [];
 
       // Fire-and-forget novelty decay for all returned chunks
@@ -131,8 +174,25 @@ export function buildRetrievalTools(store: VectorStore, embedder: Embedder) {
         try { store.updateNoveltyScores(allReturned); } catch {}
       }
 
+      const chunks = [...fmt(pool1, 1), ...fmt(pool2, 2), ...fmt(pool3, 3), ...fmt(pool4, 4)];
+      // An empty recall must SAY it is empty and say why. Silence and "nothing cleared the bar" read
+      // identically to a consumer otherwise, and a companion that cannot tell them apart either invents a
+      // memory or reports amnesia -- both of which Raziel has been on the receiving end of.
+      if (recallMode && chunks.length === 0) {
+        return {
+          chunks: [],
+          mode: "recall" as const,
+          recall_floor: RECALL_FLOOR,
+          recall_note:
+            `No chunk cleared the relevance floor (cosine >= ${RECALL_FLOOR}). This means nothing in the ` +
+            `vault is a close match for this query -- NOT that the vault is empty and NOT that it never ` +
+            `happened. It may simply never have been written down. Say you do not have it; do not guess.`,
+          ...(degraded ? { degraded } : {}),
+        };
+      }
       return {
-        chunks: [...fmt(pool1, 1), ...fmt(pool2, 2), ...fmt(pool3, 3), ...fmt(pool4, 4)],
+        chunks,
+        ...(recallMode ? { mode: "recall" as const, recall_floor: RECALL_FLOOR } : {}),
         // Present only when degraded, so the healthy payload is byte-identical to before.
         ...(degraded ? { degraded, degraded_note: "Embedder unavailable: keyword (BM25) results only. Semantic matches, the serendipity pool and the guaranteed corpus slot are all absent -- absence here does NOT mean absence from the vault." } : {}),
       };

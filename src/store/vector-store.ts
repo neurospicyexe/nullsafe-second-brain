@@ -4,6 +4,26 @@ import { randomUUID } from "crypto";
 import { emotionResonance } from "./emotion-space.js";
 import { recencyBoost, recencyWeight, recencyHalfLifeDays } from "./recency.js";
 
+/**
+ * THE CHATTER LANE: searchable, barred from the recency lanes (2026-08-10).
+ *
+ * Pools 2 (novelty) and 3 (serendipity) both rank by `novelty_score DESC` over the whole store, and a
+ * freshly-inserted row starts at maximum novelty. So live Discord messages -- which arrive continuously --
+ * would take over both query-blind pools permanently, and the commons seed and every autonomous surface
+ * would be handed this afternoon's chat as its "unfamiliar material to think about".
+ *
+ * THAT is the real reason the write-side length gates existed (MIN_HUMAN_CHARS = 50 in the bots' sb-live
+ * ingest): keeping chatter out of the STORE was the only lever available for keeping it out of these pools.
+ * The cost was that the gate also ate the short messages that matter most for continuity -- "hey meet me in
+ * the Fargo watch party channel" is 43 characters, so Raziel's exact reported scenario was discarded before
+ * it was ever written.
+ *
+ * The correct discriminator is WHICH POOL a row may surface in, not WHETHER it is stored. Chatter stays
+ * fully retrievable by relevance (pool 1, and recall mode) and is excluded here. That lets the length gates
+ * come down without regrowing the noise pool that made recall unusable.
+ */
+const NOT_CHATTER_SQL = "COALESCE(section, '') != 'discord-live'";
+
 export interface ChunkInsert {
   vault_path: string;
   companion: string | null;
@@ -236,6 +256,92 @@ export class VectorStore {
 
   private tableExists(name: string): boolean {
     return this.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(name) !== undefined;
+  }
+
+  // ── pending_embed: the queue for writes with NO durable source to re-read (2026-08-10) ────────
+  //
+  // `pending_index` above recovers a failed index by re-reading the VAULT FILE, which makes it useless for
+  // the HTTP ingest routes that deliberately write no file. `/ingest/discord` is vector-store-only, so when
+  // the embedder failed the message was not queued anywhere -- it 500'd and was GONE.
+  //
+  // Measured cost of that gap: the OpenAI credit balance hit zero on 2026-07-31 and every Discord message
+  // from then to 2026-08-10 was dropped on the floor, nine days in which the bots' per-message recall had
+  // nothing current to find. The 2026-08-01 "a write can never be lost" hardening covered the vault path and
+  // missed every HTTP entrypoint, which is the entrypoint that carries live conversation.
+  //
+  // So this table stores the TEXT, not a pointer to it. That is the whole difference: there is no source of
+  // truth to go back to, so the queue has to BE one.
+  markPendingEmbed(rec: {
+    vaultPath: string; companion: string | null; contentType: string; section: string;
+    text: string; prefixedText: string; tags: string[]; reason: string;
+  }): void {
+    this.db.prepare(`
+      CREATE TABLE IF NOT EXISTS pending_embed (
+        vault_path TEXT PRIMARY KEY,
+        companion TEXT,
+        content_type TEXT,
+        section TEXT,
+        chunk_text TEXT NOT NULL,
+        prefixed_text TEXT NOT NULL,
+        tags TEXT,
+        reason TEXT,
+        first_failed_at TEXT NOT NULL,
+        attempts INTEGER NOT NULL DEFAULT 1,
+        last_attempt_at TEXT NOT NULL
+      )
+    `).run();
+    const now = new Date().toISOString();
+    this.db.prepare(`
+      INSERT INTO pending_embed (vault_path, companion, content_type, section, chunk_text, prefixed_text, tags, reason, first_failed_at, attempts, last_attempt_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+      ON CONFLICT(vault_path) DO UPDATE SET
+        attempts = attempts + 1, last_attempt_at = excluded.last_attempt_at, reason = excluded.reason
+    `).run(
+      rec.vaultPath, rec.companion, rec.contentType, rec.section,
+      rec.text, rec.prefixedText, JSON.stringify(rec.tags ?? []), rec.reason.slice(0, 300), now, now,
+    );
+  }
+
+  listPendingEmbed(limit = 200): Array<{
+    vault_path: string; companion: string | null; content_type: string; section: string;
+    chunk_text: string; prefixed_text: string; tags: string[]; first_failed_at: string; attempts: number;
+  }> {
+    if (!this.tableExists("pending_embed")) return [];
+    const rows = this.db.prepare(
+      "SELECT * FROM pending_embed ORDER BY first_failed_at ASC LIMIT ?"
+    ).all(limit) as Array<Record<string, unknown>>;
+    return rows.map(r => ({
+      vault_path: r.vault_path as string,
+      companion: (r.companion as string | null) ?? null,
+      content_type: (r.content_type as string) ?? "observation",
+      section: (r.section as string) ?? "",
+      chunk_text: (r.chunk_text as string) ?? "",
+      prefixed_text: (r.prefixed_text as string) ?? "",
+      tags: (() => { try { return JSON.parse((r.tags as string) ?? "[]") as string[]; } catch { return []; } })(),
+      first_failed_at: r.first_failed_at as string,
+      attempts: Number(r.attempts ?? 0),
+    }));
+  }
+
+  clearPendingEmbed(vaultPath: string): void {
+    if (!this.tableExists("pending_embed")) return;
+    this.db.prepare("DELETE FROM pending_embed WHERE vault_path = ?").run(vaultPath);
+  }
+
+  /** Live conversation that is durable in the queue but not yet searchable. Surfaced in /health. */
+  pendingEmbedCount(): number {
+    if (!this.tableExists("pending_embed")) return 0;
+    const row = this.db.prepare("SELECT COUNT(*) AS n FROM pending_embed").get() as { n: number } | undefined;
+    return Number(row?.n ?? 0);
+  }
+
+  /** Oldest queue entry's age in hours -- the honest "how stale is recall" number. 0 when empty. */
+  pendingEmbedOldestAgeHours(): number {
+    if (!this.tableExists("pending_embed")) return 0;
+    const row = this.db.prepare("SELECT MIN(first_failed_at) AS t FROM pending_embed").get() as { t: string | null } | undefined;
+    if (!row?.t) return 0;
+    const ms = Date.now() - Date.parse(row.t);
+    return Number.isFinite(ms) && ms > 0 ? Math.round(ms / 36_000) / 100 : 0;
   }
 
   saveRebuildCheckpoint(): void {
@@ -487,7 +593,7 @@ export class VectorStore {
    * In lexical mode: no ANN candidates, no cosine term (normV contributes 0), BM25 carries the ranking, and
    * the recency / resonance / metamemory nudges still apply because none of them need a query vector.
    */
-  hybridSearch(queryEmbedding: number[] | null, queryText: string, limit: number, mood?: string): Array<ChunkRow & { score: number }> {
+  hybridSearch(queryEmbedding: number[] | null, queryText: string, limit: number, mood?: string): Array<ChunkRow & { score: number; cosine: number | null }> {
     // Step 1: BM25 candidates via FTS5 index — sub-millisecond, avoids full table scan.
     // OR-join the query tokens (with prefix) rather than the default implicit-AND phrase match:
     // a natural-language query no longer needs EVERY token present in one chunk to surface
@@ -577,7 +683,21 @@ export class VectorStore {
         const metamemory = 0.10 * (reliability - 0.5);
         const recency = recencyBoost(chunk.created_at, recWeight, recHalfLife, scoredAt);
         const score = 0.7 * normV + 0.3 * normB + resonance + metamemory + recency;
-        return { ...chunk, score };
+        // ABSOLUTE relevance, carried alongside the ranking score (2026-08-10).
+        //
+        // `score` cannot answer "is anything here actually about the query", and never could: `normV` is
+        // MIN-MAX NORMALIZED over the candidate set, so the best candidate always normalizes to ~1.0 no
+        // matter how unrelated it is. Measured: "quantum chromodynamics lattice gauge theory" -- a subject
+        // absent from this vault -- returned pool-1 scores of 0.89/0.81/0.81/0.78, indistinguishable from a
+        // real, answerable query, top hit matching on the word "gauge" in "a warm but settling gauge".
+        // A threshold on `score` is therefore meaningless BY CONSTRUCTION, and any consumer reading it as
+        // confidence is reading a rank position.
+        //
+        // `cosine` is the raw, un-normalized similarity: comparable across queries and thresholdable.
+        // null in lexical mode, where there is no query vector and so no honest similarity to report --
+        // deliberately null rather than 0, so "no vector" cannot be misread as "measured, and far away".
+        const cosine = queryEmbedding ? (vectorScores.get(rowid) ?? null) : null;
+        return { ...chunk, score, cosine };
       })
       .sort((a, b) => b.score - a.score)
       .slice(0, limit);
@@ -623,7 +743,7 @@ export class VectorStore {
     const fetchLimit = limit + excludeIds.length;
     const excludeSet = new Set(excludeIds);
     const rows = (this.db.prepare(
-      "SELECT * FROM embeddings ORDER BY novelty_score DESC LIMIT ?"
+      `SELECT * FROM embeddings WHERE ${NOT_CHATTER_SQL} ORDER BY novelty_score DESC LIMIT ?`
     ).all(fetchLimit) as Record<string, unknown>[])
       .filter(r => !excludeSet.has(r.id as string));
     return rows.slice(0, limit).map(r => {
@@ -640,7 +760,7 @@ export class VectorStore {
     const excludeSet = new Set(excludeIds);
     const fetchLimit = Math.max(excludeIds.length + limit * 20, 200);
     return (this.db.prepare(
-      "SELECT * FROM embeddings ORDER BY novelty_score DESC LIMIT ?"
+      `SELECT * FROM embeddings WHERE ${NOT_CHATTER_SQL} ORDER BY novelty_score DESC LIMIT ?`
     ).all(fetchLimit) as Record<string, unknown>[])
       .map(r => this.deserialize(r))
       .filter(r => !excludeSet.has(r.id))

@@ -10,6 +10,7 @@ import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middlew
 import { loadConfig } from "./config.js";
 import { loadIngestionConfig } from "./ingestion/config.js";
 import { cronHealth } from "./ingestion/cron-health.js";
+import { getEmbedderHealth } from "./embeddings/openai-embedder.js";
 import { createServer } from "./server.js";
 import { setupTriggers } from "./triggers.js";
 import { SingleUserOAuthProvider } from "./oauth-provider.js";
@@ -146,12 +147,26 @@ app.use(mcpAuthRouter({ provider: oauthProvider, issuerUrl, resourceServerUrl })
 app.get("/health", (_req, res) => {
   cronHealth.checkStale();
   const jobs = cronHealth.getAll();
-  const healthy = cronHealth.isHealthy();
+  // The embedder is a PAID remote dependency whose death is silent by design (search degrades to lexical,
+  // ingest queues). Silent is right for availability and wrong for operations -- so it is reported here, with
+  // its reason, plus the depth and age of the write queue it strands. See openai-embedder.getEmbedderHealth.
+  const embedderHealth = getEmbedderHealth();
+  const queueDepth = store.pendingEmbedCount();
+  const embedderOk = embedderHealth.ok || embedderHealth.failure_kind === "transient";
+  const healthy = cronHealth.isHealthy() && embedderOk;
   res.status(healthy ? 200 : 503).json({
     status: healthy ? "ok" : "degraded",
     service: "nullsafe-second-brain",
     timestamp: new Date().toISOString(),
     crons: jobs,
+    embedder: {
+      ...embedderHealth,
+      // Queue depth is the SECOND-ORDER alarm: if the embedder recovers but this keeps climbing, the drain
+      // is broken rather than the provider, and those are different problems with different fixes.
+      pending_embed: queueDepth,
+      pending_embed_oldest_age_hours: store.pendingEmbedOldestAgeHours(),
+      pending_index: store.pendingIndexCount(),
+    },
   });
 });
 
@@ -286,7 +301,25 @@ app.post("/ingest/discord", async (req: Request, res: Response): Promise<void> =
     const resolvedCompanion = typeof companion === "string" && companion.trim() ? companion.toLowerCase().slice(0, 64) : null;
     const text = `${typeof author === "string" && author ? author : "unknown"}: ${content.trim()}`.slice(0, 4000);
     const prefixed = contextPrefix({ path: vaultPath, companion: resolvedCompanion, contentType: "observation", section: "discord-live" }) + text;
-    const [embedding] = await embedder.embedBatch([prefixed]);
+    // A DEAD EMBEDDER MUST NOT EAT THE CONVERSATION (2026-08-10).
+    //
+    // This line used to be unguarded, so any embedder failure threw straight to the 500 below and the message
+    // was gone -- there is no vault file for a Discord message, so nothing could ever recover it. That is how
+    // 2026-07-31..08-10 vanished when the OpenAI balance hit zero. Queue the TEXT and answer 202: the caller
+    // is fire-and-forget and cannot retry, so accepting-and-queueing is the only shape that keeps the write.
+    let embedding: number[] | undefined;
+    try {
+      [embedding] = await embedder.embedBatch([prefixed]);
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      store.markPendingEmbed({
+        vaultPath, companion: resolvedCompanion, contentType: "observation", section: "discord-live",
+        text, prefixedText: prefixed, tags: ["discord-live"], reason,
+      });
+      console.warn(`[ingest/discord] embedder down, QUEUED ${vaultPath} (queue depth ${store.pendingEmbedCount()}): ${reason.slice(0, 120)}`);
+      res.status(202).json({ ok: true, queued: true, pending: store.pendingEmbedCount() });
+      return;
+    }
     // Surprisal write gate (Zikkaron, 2026-06-12). The embedding is computed anyway
     // (the insert needs it), so the gate costs one brute-force scan over the TTL-bounded
     // same-channel rows -- no extra embed call. Env knobs:
