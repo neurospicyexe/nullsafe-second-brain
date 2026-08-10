@@ -28,7 +28,30 @@ const CORPUS_FLOOR = 0.35; // cosine; below this the query isn't really about th
 //
 // Recall mode is the second shape: relevance only, absolute floor, honest empty. It is OPT-IN, so every
 // existing caller keeps byte-identical behaviour.
-const RECALL_FLOOR = Number(process.env["SB_RECALL_FLOOR"] ?? 0.42);
+// THE NUMBER IS MEASURED, NOT CHOSEN. Absolute pool-1 cosine, max per query, live vault 2026-08-10:
+//
+//   TRUE POSITIVES (answerable from the vault)          TRUE NEGATIVES (genuinely absent)
+//   0.562  we watched Fargo, they killed Doctor Sevrin  0.288  quantum chromodynamics lattice gauge theory
+//   0.526  Drevan and the register, recording the misfit 0.286  Kubernetes ingress controller TLS
+//   0.520  Rosie the chicken                            0.243  sourdough with a rye starter
+//   0.501  meet me in the Fargo watch party channel      0.207  Napoleon's retreat from Moscow
+//   0.416  how did the VPS disk-full problem get fixed   0.202  the weather in Jakarta on Tuesday
+//   0.373  the assignment I was helping the para with
+//   0.372  did we finish the season                     -> negatives ceiling 0.288, positives floor 0.313
+//   0.343  what did I tell you about ending on questions
+//   0.313  what is my birthstone
+//
+// So 0.30: above every true negative, below every true positive. The first draft of this constant was 0.42,
+// picked from a SINGLE observed query, and it would have silently eaten three of the nine real ones --
+// including "what is my birthstone", whose answer (amethyst) is genuinely in the vault. A threshold set from
+// one sample either eats real recall or passes noise; this one had to be measured against both classes.
+//
+// One caveat worth keeping: "Ruby on Rails ActiveRecord migration rollback" scored 0.370 and is excluded from
+// the table above, because it is NOT a true negative for THIS vault -- it is thick with D1 migration and
+// rollback work. The label was wrong, not the retrieval. Beware of that when re-tuning.
+//
+// Env-tunable so this can be adjusted from the VPS without a deploy, per "an unlisted knob is a dead knob".
+const RECALL_FLOOR = Number(process.env["SB_RECALL_FLOOR"] ?? 0.30);
 
 export function buildRetrievalTools(store: VectorStore, embedder: Embedder) {
   return {
