@@ -1,4 +1,5 @@
 import type { IngestionConfig } from './types.js'
+import { DEEPSEEK_BASE_URL } from './deepseek-client.js'
 
 export interface SemanticChunk {
   label: string
@@ -82,7 +83,7 @@ async function chunkSegment(
 ): Promise<SemanticChunk[]> {
   const prompt = CHUNK_PROMPT_TEMPLATE.replace('{CONTENT}', content)
 
-  const response = await fetch('https://api.deepseek.com/chat/completions', {
+  const response = await fetch(`${DEEPSEEK_BASE_URL}/chat/completions`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

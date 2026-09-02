@@ -7,6 +7,7 @@
 // Fail-silent per companion, per session. One bad session never blocks others.
 
 import type { IngestionConfig } from './types.js'
+import { DEEPSEEK_BASE_URL } from './deepseek-client.js'
 
 interface RelationalSession {
   id: string
@@ -45,7 +46,7 @@ async function callDeepSeek(
   prompt: string,
   config: Pick<IngestionConfig, 'deepseekApiKey' | 'deepseekModel'>,
 ): Promise<string> {
-  const response = await fetch('https://api.deepseek.com/chat/completions', {
+  const response = await fetch(`${DEEPSEEK_BASE_URL}/chat/completions`, {
     method: 'POST',
     signal: AbortSignal.timeout(30_000),
     headers: {

@@ -1,4 +1,5 @@
 import type { IngestRecord } from './types.js'
+import { DEEPSEEK_BASE_URL } from './deepseek-client.js'
 
 interface DeepSeekMessage {
   role: 'system' | 'user' | 'assistant'
@@ -50,7 +51,7 @@ export async function wrapChunk(
     temperature: 0.3,
   }
 
-  const response = await fetch('https://api.deepseek.com/chat/completions', {
+  const response = await fetch(`${DEEPSEEK_BASE_URL}/chat/completions`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
