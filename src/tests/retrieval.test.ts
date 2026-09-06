@@ -291,6 +291,55 @@ describe("sb_search", () => {
   });
 });
 
+// Hermes (the companions' agent runtime) detects a tool loop by hashing each tool RESULT and
+// counting consecutive identical results for the same call. Raw floats wobble at the 1e-16 level
+// between otherwise-identical queries -- rounding to 3dp is the fix.
+describe("sb_search score/cosine/novelty_score rounding (deterministic results)", () => {
+  it("rounds score, cosine, and novelty_score to 3 decimal places", async () => {
+    const chunk = {
+      ...makeChunk({ vault_path: "a.md" }),
+      score: 0.6000000000000001,
+      cosine: 0.6000000000000001,
+      novelty_score: 0.6000000000000001,
+    };
+    const { store, embedder } = buildMocks([chunk]);
+    const tools = buildRetrievalTools(store, embedder);
+
+    const result = await tools.sb_search({ query: "q", limit: 5 });
+
+    expect(result.chunks[0].score).toBe(0.6);
+    expect(result.chunks[0].cosine).toBe(0.6);
+    expect(result.chunks[0].novelty_score).toBe(0.6);
+  });
+
+  it("keeps cosine null when the chunk has no cosine (lexical mode)", async () => {
+    const chunk: Record<string, unknown> = { ...makeChunk({ vault_path: "a.md", score: 0.5 }) };
+    delete chunk["cosine"];
+    const { store, embedder } = buildMocks([chunk as unknown as ChunkRow & { score: number }]);
+    const tools = buildRetrievalTools(store, embedder);
+
+    const result = await tools.sb_search({ query: "q", limit: 5 });
+
+    expect(result.chunks[0].cosine).toBeNull();
+  });
+
+  it("produces byte-identical chunks JSON across two calls whose mocked scores differ only below 1e-6", async () => {
+    const base = makeChunk({ vault_path: "a.md" });
+    const chunkA = { ...base, score: 0.5000001, cosine: 0.5000001, novelty_score: 0.7000001 };
+    const chunkB = { ...base, score: 0.5000002, cosine: 0.5000002, novelty_score: 0.7000002 };
+
+    const { store: storeA, embedder: embedderA } = buildMocks([chunkA]);
+    const toolsA = buildRetrievalTools(storeA, embedderA);
+    const resultA = await toolsA.sb_search({ query: "q", limit: 5 });
+
+    const { store: storeB, embedder: embedderB } = buildMocks([chunkB]);
+    const toolsB = buildRetrievalTools(storeB, embedderB);
+    const resultB = await toolsB.sb_search({ query: "q", limit: 5 });
+
+    expect(JSON.stringify(resultA.chunks)).toBe(JSON.stringify(resultB.chunks));
+  });
+});
+
 describe("sb_search_by_tags", () => {
   it("truncates each chunk's text to an excerpt so more matches fit in a downstream char budget", async () => {
     const longText = "x".repeat(2000);

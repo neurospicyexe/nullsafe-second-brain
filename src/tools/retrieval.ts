@@ -53,6 +53,14 @@ const CORPUS_FLOOR = 0.35; // cosine; below this the query isn't really about th
 // Env-tunable so this can be adjusted from the VPS without a deploy, per "an unlisted knob is a dead knob".
 const RECALL_FLOOR = Number(process.env["SB_RECALL_FLOOR"] ?? 0.30);
 
+// Hermes (the companions' agent runtime) detects a tool loop by hashing each tool RESULT and
+// counting consecutive identical results for the same call. Raw floats here (score/cosine/
+// novelty_score) wobble at the 1e-16 level between otherwise-identical queries, so byte-identical
+// repeats never happen and the loop guard never fires. 3 dp is far below any ranking meaning.
+function round3(n: number): number {
+  return Math.round(n * 1000) / 1000;
+}
+
 export function buildRetrievalTools(store: VectorStore, embedder: Embedder) {
   return {
     // sb_search: hybrid concept search across all content types, plus a guaranteed corpus slot.
@@ -94,13 +102,13 @@ export function buildRetrievalTools(store: VectorStore, embedder: Embedder) {
           vault_path: chunk.vault_path,
           text: chunk.chunk_text ?? chunk.prefixed_text ?? "",
           section: chunk.section ?? "",
-          score: chunk.score,
+          score: round3(chunk.score),
           // ABSOLUTE similarity, comparable across queries -- unlike `score`, which is a min-max
           // normalized rank position (see vector-store.hybridSearch). Present so a consumer can tell
           // "strong hit" from "best of a bad candidate set"; null in lexical mode and in the
           // query-blind pools, where no honest similarity exists to report.
-          cosine: chunk.cosine ?? null,
-          novelty_score: chunk.novelty_score,
+          cosine: chunk.cosine != null ? round3(chunk.cosine) : null,
+          novelty_score: round3(chunk.novelty_score),
           // WHEN (2026-07-31). Omitted until now, so every consumer -- including the Discord bots'
           // per-message recall -- received chunks it could not place in time and had no way to tell a
           // June summary from last night's note. Ranking by recency is useless if the consumer still
@@ -298,7 +306,9 @@ export function buildRetrievalTools(store: VectorStore, embedder: Embedder) {
         contentType: args.content_type,
         limit: args.limit ?? 20,
       });
-      return { chunks };
+      // novelty_score is a stored REAL decremented by floating subtraction (see updateNoveltyScores);
+      // round it for the same Hermes result-hash loop-guard reason as sb_search's fmt().
+      return { chunks: chunks.map(c => ({ ...c, novelty_score: round3(c.novelty_score) })) };
     },
 
     async sb_recent_patterns(args: { vaultAdapter: VaultAdapter; summaryPath: string }) {
