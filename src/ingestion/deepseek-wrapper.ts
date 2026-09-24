@@ -1,5 +1,6 @@
 import type { IngestRecord } from './types.js'
 import { DEEPSEEK_BASE_URL } from './deepseek-client.js'
+import { withOwnerPronounRule } from '../pronoun-rule.js'
 
 interface DeepSeekMessage {
   role: 'system' | 'user' | 'assistant'
@@ -41,7 +42,13 @@ export async function wrapChunk(
 
   const body = {
     model: config.deepseekModel,
+    // The wrap preamble names "who wrote this" and can reference Raziel directly -- carry the
+    // owner pronoun rule as its own system message (2026-09-24).
     messages: [
+      {
+        role: 'system' as const,
+        content: withOwnerPronounRule(''),
+      },
       {
         role: 'user' as const,
         content: prompt,

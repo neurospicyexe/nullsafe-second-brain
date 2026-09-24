@@ -7,6 +7,8 @@
 // drained the fallback lane to -$0.03 chewing its self-healed backlog on the delisted
 // `deepseek-chat` alias.
 
+import { withOwnerPronounRule } from '../pronoun-rule.js'
+
 export const DEEPSEEK_BASE_URL = process.env.DEEPSEEK_BASE_URL ?? 'https://api.deepseek.com'
 
 export async function callDeepSeek(apiKey: string, model: string, prompt: string): Promise<string> {
@@ -15,7 +17,13 @@ export async function callDeepSeek(apiKey: string, model: string, prompt: string
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
     body: JSON.stringify({
       model,
-      messages: [{ role: 'user', content: prompt }],
+      // This is the shared ingestion chokepoint -- callers pass only a user prompt, so the owner
+      // pronoun rule rides as its own system message rather than being spliced into their prompt
+      // text (2026-09-24; Raziel called "she" in synthesized session prose).
+      messages: [
+        { role: 'system', content: withOwnerPronounRule('') },
+        { role: 'user', content: prompt },
+      ],
       max_tokens: 800,
       temperature: 0.4,
     }),

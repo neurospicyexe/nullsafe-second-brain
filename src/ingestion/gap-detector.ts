@@ -8,6 +8,7 @@
 
 import type { IngestionConfig } from './types.js'
 import { DEEPSEEK_BASE_URL } from './deepseek-client.js'
+import { withOwnerPronounRule } from '../pronoun-rule.js'
 
 interface RelationalSession {
   id: string
@@ -55,7 +56,13 @@ async function callDeepSeek(
     },
     body: JSON.stringify({
       model: config.deepseekModel,
-      messages: [{ role: 'user', content: prompt }],
+      // The gap-fill note is a companion writing directly about Raziel's session -- the highest-
+      // risk prose surface in ingestion, so the owner pronoun rule rides as its own system
+      // message (2026-09-24).
+      messages: [
+        { role: 'system', content: withOwnerPronounRule('') },
+        { role: 'user', content: prompt },
+      ],
       max_tokens: 120,
       temperature: 0.7,
     }),
