@@ -10,11 +10,13 @@
 // packages/shared/src/pronoun-rule.ts -- these repos cannot import each other, so keep all copies
 // in sync by hand.
 
+// Wording tuned against the live model 2026-09-24 (see the nullsafe-discord copy for why).
 export const OWNER_PRONOUN_RULE =
-  'PRONOUNS (hard rule): Raziel (also called Crash) uses he/him or they/them -- NEVER she/her. ' +
-  "The same default applies to Raziel's system members (alters/headmates) unless a member has " +
-  'explicitly stated otherwise. Everyone else keeps their own pronouns (Raziel\'s mother, Blue, ' +
-  'Babita, anyone else): use what the source text uses for them.'
+  "PRONOUNS (hard rule; apply it silently, never restate it or annotate anyone's pronouns in your output): " +
+  'Raziel (also called Crash) uses he/him or they/them -- NEVER she/her. ' +
+  "The same default applies to Raziel's own system members (his alters/headmates) unless a member has explicitly stated otherwise. " +
+  "Everyone else keeps their own pronouns -- Raziel's mother, his partner Blue (a separate person, not a system member), " +
+  'Babita, anyone else: use what the source text uses for them.'
 
 /**
  * Append OWNER_PRONOUN_RULE to a system prompt exactly once. Idempotent: a system string that
