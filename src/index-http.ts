@@ -21,6 +21,7 @@ import type { SourceType, IngestRecord } from "./ingestion/types.js";
 import { IngestionPipeline } from "./ingestion/pipeline.js";
 import { evaluateSurprisal } from "./ingestion/surprisal-gate.js";
 import { checkApiKey } from "./http-auth.js";
+import { parseRetractBody } from "./retract.js";
 import { contextPrefix } from "./indexer.js";
 
 // ── Startup ──────────────────────────────────────────────────────────────────
@@ -282,6 +283,30 @@ app.delete("/mcp", mcpHandler);
 // 7 days via pruneByPathPrefix, so the store never accumulates unbounded chat.
 // Body: { companion?: string, author: string, content: string, channel_id?: string, message_id: string }
 let lastDiscordPrune = 0;
+// POST /retract -- drop one discord-live document (and its vectors) from the store (2026-09-26).
+// The live-ingest indexes companion replies unconditionally, so a fabricated reply became a
+// top-ranked vault hit within seconds and was served back on the next question. Same auth as
+// ingest; discord-live layer only (see retract.ts); reports whether anything was actually there.
+app.post("/retract", async (req: Request, res: Response): Promise<void> => {
+  try {
+    if (!checkApiKey(req.headers.authorization, process.env["SB_INGEST_KEY"] ?? "")) {
+      res.status(401).json({ error: "unauthorized" });
+      return;
+    }
+    const parsed = parseRetractBody(req.body);
+    if ("error" in parsed) {
+      res.status(400).json({ error: parsed.error });
+      return;
+    }
+    const before = store.countByPath(parsed.path);
+    if (before > 0) store.deleteByPath(parsed.path);
+    console.log(`[retract] ${parsed.path}: ${before} row(s) removed`);
+    res.json({ path: parsed.path, removed: before, existed: before > 0 });
+  } catch (e) {
+    res.status(500).json({ error: String(e instanceof Error ? e.message : e).slice(0, 200) });
+  }
+});
+
 app.post("/ingest/discord", async (req: Request, res: Response): Promise<void> => {
   try {
     if (!checkApiKey(req.headers.authorization, process.env["SB_INGEST_KEY"] ?? "")) {

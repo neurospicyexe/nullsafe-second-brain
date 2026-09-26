@@ -425,3 +425,24 @@ describe("VectorStore searchByTags", () => {
     rmSync(dbPath, { maxRetries: 5, retryDelay: 100 });
   });
 });
+
+// retract (2026-09-26): the live-ingest indexes companion replies unconditionally, so a fabricated
+// reply becomes a top-ranked vault hit within seconds (measured: a made-up blood-sugar number at
+// score 0.73 above the true capture). Nothing exposed deleteByPath over HTTP. countByPath is what
+// lets POST /retract say whether anything was actually there, instead of "ok" for a path that
+// never existed.
+describe("VectorStore retract support", () => {
+  it("countByPath counts rows for one path and 0 for an unknown one", () => {
+    const { store, dbPath } = makeStore();
+    store.insert(makeChunk({ vault_path: "discord-live/1/2.md", chunk_index: 0 }) as any);
+    store.insert(makeChunk({ vault_path: "discord-live/1/2.md", chunk_index: 1 }) as any);
+    store.insert(makeChunk({ vault_path: "discord-live/1/3.md" }) as any);
+    expect(store.countByPath("discord-live/1/2.md")).toBe(2);
+    expect(store.countByPath("discord-live/1/999.md")).toBe(0);
+    store.deleteByPath("discord-live/1/2.md");
+    expect(store.countByPath("discord-live/1/2.md")).toBe(0);
+    expect(store.countByPath("discord-live/1/3.md")).toBe(1);
+    store.close();
+    rmSync(dbPath, { maxRetries: 5, retryDelay: 100 });
+  });
+});

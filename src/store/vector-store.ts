@@ -476,6 +476,12 @@ export class VectorStore {
     ).all() as Array<{ vault_path: string; companion: string | null; content_type: string; tags: string }>;
   }
 
+  /** Rows indexed under one exact path. Lets POST /retract say whether anything was there. */
+  countByPath(vaultPath: string): number {
+    const row = this.db.prepare("SELECT COUNT(*) AS n FROM embeddings WHERE vault_path = ?").get(vaultPath) as { n: number } | undefined;
+    return Number(row?.n ?? 0);
+  }
+
   deleteByPath(vaultPath: string): void {
     // Remove matching rows from the ANN index first (collect rowids before they're gone).
     if (this.vecEnabled && this.vecDim !== null) {
