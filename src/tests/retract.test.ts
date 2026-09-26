@@ -18,8 +18,15 @@ describe("parseRetractBody", () => {
     expect(parseRetractBody({ channel_id: "1", message_id: "2" })).toEqual({ path: "discord-live/1/2.md" });
     expect(parseRetractBody({ vault_path: "discord-live/1/2.md" })).toEqual({ path: "discord-live/1/2.md" });
   });
-  it("refuses anything outside discord-live: retract is for the live layer, never the vault proper", () => {
+  it("accepts the rag/ mirrors of D1 rows: they are rebuildable copies, not canon", () => {
+    // 2026-09-26: the puller had mirrored two archived journal rows as rag/companion_journal/<id>,
+    // each wrapped in a book report, and they were the TOP TWO hits for the fabricated number.
+    expect(parseRetractBody({ vault_path: "rag/companion_journal/56a25489-b3d2-4b03-a4ab-c3e61cebb20c" })).toEqual({ path: "rag/companion_journal/56a25489-b3d2-4b03-a4ab-c3e61cebb20c" });
+    expect(parseRetractBody({ vault_path: "rag/wm_continuity_notes/abc" })).toEqual({ path: "rag/wm_continuity_notes/abc" });
+  });
+  it("refuses anything outside discord-live and the rag mirrors: the vault proper is canon", () => {
     expect(parseRetractBody({ vault_path: "raziel/sessions/2026-09-25-summary.md" })).toEqual({ error: expect.stringContaining("discord-live") });
+    expect(parseRetractBody({ vault_path: "rag/../raziel/x.md" })).toEqual({ error: expect.any(String) });
     expect(parseRetractBody({ vault_path: "../discord-live/x.md" })).toEqual({ error: expect.any(String) });
     expect(parseRetractBody({})).toEqual({ error: expect.any(String) });
     expect(parseRetractBody({ message_id: "" })).toEqual({ error: expect.any(String) });

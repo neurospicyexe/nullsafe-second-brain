@@ -26,8 +26,13 @@ export function parseRetractBody(body: unknown): RetractParse {
   const cid = typeof b["channel_id"] === "string" ? b["channel_id"].trim() : undefined;
   const path = vp || (mid ? discordLivePath(cid, mid) : "");
   if (!path) return { error: "message_id (with channel_id) or vault_path is required" };
-  if (!path.startsWith("discord-live/") || path.includes("..")) {
-    return { error: "retract only reaches the discord-live layer; the vault proper is not retractable here" };
+  // discord-live (the 7-day recency lane) and the rag/ mirrors of Halseth D1 rows (rebuildable
+  // copies of companion_journal / wm_continuity_notes, each wrapped in a synthesis "book report").
+  // Both are derived stores; D1 is truth. The vault proper (raziel/, canon/, sessions...) is not
+  // reachable from here.
+  const RETRACTABLE = ["discord-live/", "rag/companion_journal/", "rag/wm_continuity_notes/"];
+  if (path.includes("..") || !RETRACTABLE.some(prefix => path.startsWith(prefix))) {
+    return { error: "retract only reaches the discord-live layer and the rag/ mirrors of D1 rows; the vault proper is not retractable here" };
   }
   return { path };
 }
