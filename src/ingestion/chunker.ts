@@ -1,5 +1,5 @@
 import type { IngestionConfig } from './types.js'
-import { DEEPSEEK_BASE_URL } from './deepseek-client.js'
+import { chatComplete } from './deepseek-client.js'
 
 export interface SemanticChunk {
   label: string
@@ -83,26 +83,19 @@ async function chunkSegment(
 ): Promise<SemanticChunk[]> {
   const prompt = CHUNK_PROMPT_TEMPLATE.replace('{CONTENT}', content)
 
-  const response = await fetch(`${DEEPSEEK_BASE_URL}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${config.deepseekApiKey}`,
-    },
-    body: JSON.stringify({
-      model: config.deepseekModel,
-      messages: [{ role: 'user', content: prompt }],
-      max_tokens: 8000,
-      temperature: 0.2,
-    }),
-  })
+  // DeepInfra first, direct DeepSeek only as the emergency lane (deepseek-client.ts).
+  const result = await chatComplete({
+    messages: [{ role: 'user', content: prompt }],
+    maxTokens: 8000,
+    temperature: 0.2,
+    caller: 'semanticChunk',
+  }, config)
 
-  if (!response.ok) {
-    throw new Error(`DeepSeek chunking failed: ${response.status}`)
+  if (!result.ok) {
+    throw new Error(`DeepSeek chunking failed: ${result.status ?? 'network'}`)
   }
 
-  const data = await response.json() as { choices: Array<{ message: { content: string } }> }
-  const raw = data.choices[0]?.message?.content ?? ''
+  const raw = result.content
 
   // Extract JSON array -- model may wrap in markdown or add preamble text
   const start = raw.indexOf('[')

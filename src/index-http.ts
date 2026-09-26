@@ -450,7 +450,7 @@ app.post("/ingest/text", async (req: Request, res: Response): Promise<void> => {
 // Single-file shorthand: { filename: string, content: string, source_type?: SourceType }
 app.post("/ingest/corpus-file", async (req: Request, res: Response): Promise<void> => {
   if (!ingestionConfig) {
-    res.status(503).json({ error: "ingestion config not available — check DEEPSEEK_API_KEY, HALSETH_URL, HALSETH_SECRET env vars" });
+    res.status(503).json({ error: "ingestion config not available — check DEEPINFRA_API_KEY or DEEPSEEK_API_KEY, HALSETH_URL, HALSETH_SECRET env vars" });
     return;
   }
 

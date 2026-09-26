@@ -72,7 +72,9 @@ describe('semanticChunk', () => {
     expect(fetchMock).toHaveBeenCalledOnce()
     const callArgs = fetchMock.mock.calls[0]
     expect(callArgs[0]).toBe('https://api.deepseek.com/chat/completions')
-    expect(JSON.parse(callArgs[1].body).model).toBe('deepseek-chat')
+    // No DEEPINFRA_API_KEY in the test env => direct DeepSeek only, and the DELISTED
+    // `deepseek-chat` alias is remapped to the live flash id (deepseek-client.ts).
+    expect(JSON.parse(callArgs[1].body).model).toBe('deepseek-v4-flash')
   })
 
   it('strips markdown code block wrapper before parsing', async () => {

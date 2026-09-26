@@ -7,7 +7,7 @@
 // Fail-silent per companion, per session. One bad session never blocks others.
 
 import type { IngestionConfig } from './types.js'
-import { DEEPSEEK_BASE_URL } from './deepseek-client.js'
+import { chatComplete } from './deepseek-client.js'
 import { withOwnerPronounRule } from '../pronoun-rule.js'
 
 interface RelationalSession {
@@ -23,12 +23,6 @@ interface RelationalSession {
 
 interface RecentRelationalResponse {
   sessions: RelationalSession[]
-}
-
-interface DeepSeekResponse {
-  choices: Array<{
-    message: { role: string; content: string }
-  }>
 }
 
 const COMPANIONS = ['drevan', 'cypher', 'gaia'] as const
@@ -47,34 +41,26 @@ async function callDeepSeek(
   prompt: string,
   config: Pick<IngestionConfig, 'deepseekApiKey' | 'deepseekModel'>,
 ): Promise<string> {
-  const response = await fetch(`${DEEPSEEK_BASE_URL}/chat/completions`, {
-    method: 'POST',
-    signal: AbortSignal.timeout(30_000),
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${config.deepseekApiKey}`,
-    },
-    body: JSON.stringify({
-      model: config.deepseekModel,
-      // The gap-fill note is a companion writing directly about Raziel's session -- the highest-
-      // risk prose surface in ingestion, so the owner pronoun rule rides as its own system
-      // message (2026-09-24).
-      messages: [
-        { role: 'system', content: withOwnerPronounRule('') },
-        { role: 'user', content: prompt },
-      ],
-      max_tokens: 120,
-      temperature: 0.7,
-    }),
-  })
+  // DeepInfra first, direct DeepSeek only as the emergency lane (deepseek-client.ts).
+  const result = await chatComplete({
+    // The gap-fill note is a companion writing directly about Raziel's session -- the highest-
+    // risk prose surface in ingestion, so the owner pronoun rule rides as its own system
+    // message (2026-09-24).
+    messages: [
+      { role: 'system', content: withOwnerPronounRule('') },
+      { role: 'user', content: prompt },
+    ],
+    maxTokens: 120,
+    temperature: 0.7,
+    timeoutMs: 30_000,
+    caller: 'gap-detector',
+  }, config)
 
-  if (!response.ok) {
-    const errorText = await response.text()
-    throw new Error(`DeepSeek API error ${response.status}: ${errorText}`)
+  if (!result.ok) {
+    throw new Error(`DeepSeek API error ${result.status ?? 'network'}: ${result.text}`)
   }
 
-  const data = (await response.json()) as DeepSeekResponse
-  const content = data.choices[0]?.message?.content?.trim() ?? ''
+  const content = result.content.trim()
   if (!content) throw new Error('DeepSeek returned empty content')
   return content
 }

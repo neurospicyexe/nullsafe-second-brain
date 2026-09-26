@@ -42,8 +42,8 @@ export interface HwmMap {
 export interface IngestionConfig {
   halsethUrl: string
   halsethSecret: string
-  deepseekApiKey: string
-  deepseekModel: string        // default: 'deepseek-chat'
+  deepseekApiKey: string       // direct DeepSeek EMERGENCY lane ('' when unset); DeepInfra key is DEEPINFRA_API_KEY
+  deepseekModel: string        // default: 'deepseek-v4-flash' (per-vendor ids resolved in deepseek-client.ts)
   cronSchedule: string         // default: '*/20 * * * *'
   concurrencyLimit: number     // for corpus backfill, default: 3
   concurrencyDelayMs: number   // default: 500

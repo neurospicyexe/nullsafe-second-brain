@@ -1,17 +1,6 @@
 import type { IngestRecord } from './types.js'
-import { DEEPSEEK_BASE_URL } from './deepseek-client.js'
+import { chatComplete } from './deepseek-client.js'
 import { withOwnerPronounRule } from '../pronoun-rule.js'
-
-interface DeepSeekMessage {
-  role: 'system' | 'user' | 'assistant'
-  content: string
-}
-
-interface DeepSeekResponse {
-  choices: Array<{
-    message: { role: string; content: string }
-  }>
-}
 
 export function buildWrapPrompt(record: IngestRecord): string {
   return `You are annotating a chunk of relational data for semantic search.
@@ -40,40 +29,24 @@ export async function wrapChunk(
 ): Promise<string> {
   const prompt = buildWrapPrompt(record)
 
-  const body = {
-    model: config.deepseekModel,
+  // DeepInfra first, direct DeepSeek only as the emergency lane (deepseek-client.ts).
+  const result = await chatComplete({
     // The wrap preamble names "who wrote this" and can reference Raziel directly -- carry the
     // owner pronoun rule as its own system message (2026-09-24).
     messages: [
-      {
-        role: 'system' as const,
-        content: withOwnerPronounRule(''),
-      },
-      {
-        role: 'user' as const,
-        content: prompt,
-      },
-    ] satisfies DeepSeekMessage[],
-    max_tokens: 200,
+      { role: 'system', content: withOwnerPronounRule('') },
+      { role: 'user', content: prompt },
+    ],
+    maxTokens: 200,
     temperature: 0.3,
+    caller: 'wrapChunk',
+  }, config)
+
+  if (!result.ok) {
+    throw new Error(`DeepSeek API error ${result.status ?? 'network'}: ${result.text}`)
   }
 
-  const response = await fetch(`${DEEPSEEK_BASE_URL}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${config.deepseekApiKey}`,
-    },
-    body: JSON.stringify(body),
-  })
-
-  if (!response.ok) {
-    const errorText = await response.text()
-    throw new Error(`DeepSeek API error ${response.status}: ${errorText}`)
-  }
-
-  const data = (await response.json()) as DeepSeekResponse
-  const preamble = data.choices[0]?.message?.content ?? ''
+  const preamble = result.content
 
   if (!preamble) {
     throw new Error('DeepSeek returned empty preamble')

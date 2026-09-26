@@ -58,12 +58,12 @@ Runs inside this process via `src/ingestion/`.
 ```
 src/ingestion/
   types.ts              SourceType, IngestRecord, IngestionConfig
-  config.ts             loadIngestionConfig() — env: DEEPSEEK_API_KEY, HALSETH_URL, etc.
+  config.ts             loadIngestionConfig() — env: DEEPINFRA_API_KEY (primary) / DEEPSEEK_API_KEY (fallback), HALSETH_URL, etc.
   hwm.ts                High-water mark store (SQLite) — per-source dedup
   puller.ts             13-source Halseth puller (feelings, relational_delta, companion_journal,
                         synthesis_summary, inter_companion_note, handoff, wound, companion_dream,
                         open_loop, relational_state, tension, growth_journal, companion_conclusion)
-  deepseek-client.ts    Shared DeepSeek HTTP client
+  deepseek-client.ts    The ONE chat client: DeepInfra first, direct DeepSeek = loud emergency fallback
   deepseek-wrapper.ts   Wraps each record with narrative framing via DeepSeek
   chunker.ts            semanticChunk() — splits large files at topic/emotional pivots via DeepSeek
   corpus.ts             processCorpus() — batch indexer for raw .md files

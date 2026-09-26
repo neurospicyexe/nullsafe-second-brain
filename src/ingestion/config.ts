@@ -7,11 +7,16 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 export function loadIngestionConfig(): IngestionConfig {
   const halsethUrl = process.env.HALSETH_URL
   const halsethSecret = process.env.HALSETH_SECRET
-  const deepseekApiKey = process.env.DEEPSEEK_API_KEY
+  // DEEPSEEK_API_KEY is the direct-platform EMERGENCY lane; DEEPINFRA_API_KEY is primary and is
+  // read at call time by deepseek-client.ts. Either one is enough to run ingestion.
+  const deepseekApiKey = process.env.DEEPSEEK_API_KEY ?? ''
+  const deepinfraApiKey = process.env.DEEPINFRA_API_KEY
 
   if (!halsethUrl) throw new Error('HALSETH_URL env var is required for ingestion')
   if (!halsethSecret) throw new Error('HALSETH_SECRET env var is required for ingestion')
-  if (!deepseekApiKey) throw new Error('DEEPSEEK_API_KEY env var is required for ingestion')
+  if (!deepseekApiKey && !deepinfraApiKey) {
+    throw new Error('DEEPINFRA_API_KEY (primary) or DEEPSEEK_API_KEY (fallback) env var is required for ingestion')
+  }
 
   // Resolve hwm path relative to this file: src/ingestion/ -> src/ -> project root -> data/hwm.json
   const hwmPath = path.resolve(__dirname, '../../data/hwm.json')
@@ -20,7 +25,7 @@ export function loadIngestionConfig(): IngestionConfig {
     halsethUrl,
     halsethSecret,
     deepseekApiKey,
-    deepseekModel: process.env.DEEPSEEK_MODEL ?? 'deepseek-chat',
+    deepseekModel: process.env.DEEPSEEK_MODEL ?? 'deepseek-v4-flash',
     cronSchedule: process.env.INGESTION_CRON ?? '*/20 * * * *',
     concurrencyLimit: parseInt(process.env.INGESTION_CONCURRENCY ?? '3', 10),
     concurrencyDelayMs: parseInt(process.env.INGESTION_DELAY_MS ?? '500', 10),
