@@ -80,3 +80,91 @@ describe("classifyDrift (calibrated)", () => {
     expect(classifyDrift(0.64, flat, CAL)).toBe("growth");
   });
 });
+
+// ── Drift flag -> ledger lane (2026-09-26, imp-lane tranche 1) ──────────────
+// The sustained-pressure flag used to be a second-person companion_journal row ("your own norm").
+// It is now a drift-reader ledger line, third person, sourced to the basin_history row just written.
+import { vi, afterEach } from "vitest";
+import { runDriftEvaluation, buildDriftLedgerBody } from "./evaluator.js";
+import type { IngestionConfig } from "./types.js";
+import type { OpenAIEmbedder } from "../embeddings/openai-embedder.js";
+
+describe("buildDriftLedgerBody", () => {
+  it("is a Recorded: line in third person, scores only, basin quoted", () => {
+    const body = buildDriftLedgerBody({ companionId: "drevan", avgScore: 0.9512, baselineMean: 0.6, sampleCount: 12, worstBasin: "the house I hold" });
+    expect(body).toBe(
+      'Recorded: sustained pressure drift for Drevan across two consecutive evaluator runs. ' +
+      'avg_distance=0.951 vs baseline_mean=0.600 (n=12). Worst drifted basin: "the house I hold".',
+    );
+    const unquoted = body.replace(/"[^"]*"/g, "");
+    expect(unquoted).not.toMatch(/\b(you|your|I|me|my|we|our)\b/i);
+    expect(body).not.toMatch(/Self-return|recommended/);
+  });
+
+  it("strips quotes and mark glyphs from the basin name; omits the clause when empty", () => {
+    expect(buildDriftLedgerBody({ companionId: "gaia", avgScore: 1, baselineMean: 0.5, sampleCount: 5, worstBasin: '〔x〕 "y"' }))
+      .toContain('Worst drifted basin: "x y".');
+    expect(buildDriftLedgerBody({ companionId: "gaia", avgScore: 1, baselineMean: 0.5, sampleCount: 5, worstBasin: "" }))
+      .not.toContain("basin:");
+  });
+});
+
+describe("runDriftEvaluation -> ledger", () => {
+  const CONFIG = { halsethUrl: "https://h.example", halsethSecret: "sek" } as IngestionConfig;
+  const embedder = { embed: vi.fn(async () => [0, 1]) } as unknown as OpenAIEmbedder;
+  afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+
+  function stubHalseth(ledgerStatus = 201) {
+    const calls: Array<{ url: URL; init?: RequestInit }> = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(String(input));
+      calls.push({ url, init });
+      const j = (b: unknown, s = 200) => new Response(JSON.stringify(b), { status: s });
+      if (url.pathname === "/persona-blocks") return j({ blocks: [{ content: "voice" }] });
+      if (url.pathname.startsWith("/companion-growth/basins/")) return j({ basins: [{ id: "b1", basin_name: "hearth", embedding: "[1,0]" }] });
+      if (url.pathname.startsWith("/companion-growth/basin-history/") && init?.method !== "POST") {
+        // previous evaluator run was pressure -> this run's pressure is SUSTAINED
+        return j({ history: Array.from({ length: 6 }, () => ({ drift_score: 0.6, drift_type: "pressure", notes: "blocks_analyzed=1" })) });
+      }
+      if (url.pathname === "/companion-growth/basin-history") {
+        const body = JSON.parse(String(init!.body));
+        return j({ id: `bh-${body.companion_id}`, message: "ok" }, 201);
+      }
+      if (url.pathname === "/ledger") return j({ id: "led_1", content: "x" }, ledgerStatus);
+      return j({ error: "unexpected" }, 500);
+    }));
+    return calls;
+  }
+
+  it("writes basin_history unchanged, then one drift-reader ledger line per companion sourced to that row; never the journal", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const calls = stubHalseth();
+    await runDriftEvaluation(CONFIG, embedder);
+    const history = calls.filter(c => c.url.pathname === "/companion-growth/basin-history");
+    expect(history).toHaveLength(3);
+    expect(JSON.parse(String(history[0]!.init!.body))).toMatchObject({ drift_type: "pressure", worst_basin: "hearth" });
+    const ledger = calls.filter(c => c.url.pathname === "/ledger").map(c => JSON.parse(String(c.init!.body)));
+    expect(ledger).toHaveLength(3);
+    const drevan = ledger.find(l => l.companion_id === "drevan");
+    expect(drevan).toMatchObject({
+      function: "drift-reader",
+      source_kind: "row",
+      source_ref: "companion_basin_history:bh-drevan",
+    });
+    expect(drevan.body).toMatch(/^Recorded: sustained pressure drift for Drevan /);
+    expect(drevan.body).not.toMatch(/\byour?\b/i);
+    expect(calls.some(c => c.url.pathname.includes("companion-journal"))).toBe(false);
+  });
+
+  it("a 404 or 422 from /ledger is logged and skipped -- no journal fallback", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    for (const status of [404, 422]) {
+      const calls = stubHalseth(status);
+      await runDriftEvaluation(CONFIG, embedder);
+      expect(calls.some(c => c.url.pathname.includes("companion-journal"))).toBe(false);
+    }
+    expect(err.mock.calls.flat().join(" ")).toMatch(/404/);
+    expect(err.mock.calls.flat().join(" ")).toMatch(/LEDGER REJECTED/);
+  });
+});

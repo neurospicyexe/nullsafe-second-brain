@@ -16,6 +16,7 @@
 
 import type { IngestionConfig } from "./types.js";
 import type { OpenAIEmbedder } from "../embeddings/openai-embedder.js";
+import { postLedger } from "./ledger-client.js";
 
 export type DriftType = "stable" | "growth" | "pressure";
 
@@ -70,6 +71,28 @@ export function classifyDrift(
   if (z >= cal.pressureZ && margin >= cal.minMargin) return "pressure";
   if (z >= cal.growthZ && margin >= cal.minMargin / 2) return "growth";
   return "stable";
+}
+
+// The drift-reader's ledger body (2026-09-26, imp-lane tranche 1). Pure, so its grammar-safety is
+// testable: starts with a record verb, third person about the companion (never "you/your"), restates
+// only the computed scores. The basin name is operator/companion-authored free text, so it rides inside
+// straight double quotes (the ledger grammar does not pronoun-scan quoted text), with any quote or
+// ledger-mark glyph stripped so it cannot close the quote early or forge a mark.
+export function buildDriftLedgerBody(args: {
+  companionId: string;
+  avgScore: number;
+  baselineMean: number;
+  sampleCount: number;
+  worstBasin: string;
+}): string {
+  const name = args.companionId.charAt(0).toUpperCase() + args.companionId.slice(1);
+  const basin = args.worstBasin.replace(/["“”〔〕]/g, "").trim();
+  const basinClause = basin ? ` Worst drifted basin: "${basin}".` : "";
+  return (
+    `Recorded: sustained pressure drift for ${name} across two consecutive evaluator runs. ` +
+    `avg_distance=${args.avgScore.toFixed(3)} vs baseline_mean=${args.baselineMean.toFixed(3)} (n=${args.sampleCount}).` +
+    basinClause
+  );
 }
 
 function cosineSimilarity(a: number[], b: number[]): number {
@@ -252,18 +275,39 @@ export async function runDriftEvaluation(
         );
       }
 
-      // 8. Journal flag ONLY on SUSTAINED pressure (this run AND the previous
+      // 8. Ledger flag ONLY on SUSTAINED pressure (this run AND the previous
       //    evaluator run both pressure). A single elevated reading is not worth a
-      //    permanent self-return note -- gating here is what stops the flood.
+      //    permanent record -- gating here is what stops the flood.
+      //
+      //    2026-09-26 (imp-lane tranche 1): this used to be a companion_journal row addressed to the
+      //    companion in second person ("above your own norm ... Self-return recommended") and filed
+      //    under his agent. A clerk does not write as him or to him: the flag is now a `drift-reader`
+      //    line in the ledger lane, third person, scores only, with the basin_history row written in
+      //    step 7 as its source. No row id = no source = no write. A 404 (Halseth without the lane)
+      //    or 422 (grammar refusal) is logged and skipped -- never a journal fallback.
       if (driftType === "pressure" && previousDriftType === "pressure") {
-        console.log(`[evaluator] ${companionId}: SUSTAINED PRESSURE DRIFT -- writing flag`);
-        const noteContent = `[drift_flag] Sustained pressure drift. avg_distance=${avgScore.toFixed(3)} vs baseline_mean=${baseline.mean.toFixed(3)} (n=${baseline.sampleCount}). Worst drifted basin: ${worstBasin}. Two consecutive evaluator runs above your own norm -- review recent sessions for asymmetric register pressure. Self-return recommended.`;
-        await halsethPost(`${config.halsethUrl}/companion-journal`, config.halsethSecret, {
-          agent: companionId,
-          note_text: noteContent,
-          tags: ["drift_flag", "pressure_drift"],
-          source: "evaluator",
-        });
+        console.log(`[evaluator] ${companionId}: SUSTAINED PRESSURE DRIFT -- writing ledger flag`);
+        if (!historyResult.id) {
+          console.error(`[evaluator] ${companionId}: basin-history write returned no id -- no source, no ledger write`);
+        } else {
+          const result = await postLedger(config, {
+            companion_id: companionId,
+            function: "drift-reader",
+            body: buildDriftLedgerBody({
+              companionId, avgScore, baselineMean: baseline.mean, sampleCount: baseline.sampleCount, worstBasin,
+            }),
+            source_kind: "row",
+            source_ref: `companion_basin_history:${historyResult.id}`,
+            dedup_key: `drift:${companionId}:${historyResult.id}`,
+          });
+          if (result.kind === "rejected") {
+            console.error(`[evaluator] LEDGER REJECTED ${companionId} drift flag: rule=${result.rule} error=${result.error}`);
+          } else if (result.kind === "unavailable") {
+            console.error(`[evaluator] ${companionId}: POST /ledger returned 404 -- Halseth has no ledger lane yet; drift flag skipped (no journal fallback)`);
+          } else if (result.kind === "error") {
+            console.error(`[evaluator] ${companionId}: ledger write failed: ${result.status ?? "network"} ${result.message}`);
+          }
+        }
       }
 
     } catch (err) {
