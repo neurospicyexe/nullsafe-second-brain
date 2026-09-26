@@ -16,7 +16,7 @@ vi.mock('./deepseek-wrapper.js', () => ({
 vi.mock('./hwm.js', () => ({
   loadHwm: vi.fn().mockReturnValue({}),
   saveHwm: vi.fn(),
-  getHwm: vi.fn().mockReturnValue(undefined),
+  getHwm: vi.fn().mockImplementation((hwm: Record<string, string>, source: string) => hwm[source]),
   setHwm: vi.fn().mockImplementation((hwm: Record<string, string>, source: string, ts: string) => ({ ...hwm, [source]: ts })),
 }))
 
@@ -81,7 +81,7 @@ beforeEach(() => {
 })
 
 describe('IngestionPipeline.run()', () => {
-  it('skips already-indexed record (existsByPath returns true)', async () => {
+  it('skips already-indexed record (existsByPath returns true) -- and advances the mark past it', async () => {
     mockPull.mockResolvedValueOnce({ records: [mockRecord] })
     mockWrapChunk.mockResolvedValueOnce('wrapped text')
 
@@ -95,7 +95,31 @@ describe('IngestionPipeline.run()', () => {
     expect(mockWrapChunk).not.toHaveBeenCalled()
     expect(embedder.embed).not.toHaveBeenCalled()
     expect(store.insert).not.toHaveBeenCalled()
-    expect(mockSaveHwm).not.toHaveBeenCalled()
+    // 2026-09-26: a duplicate IS indexed, so the mark moves past it. Before, a page of 100 duplicates
+    // (e.g. after a one-time rewind) never moved the mark and was re-fetched every cycle forever.
+    expect(mockSaveHwm).toHaveBeenCalledTimes(1)
+    expect(mockSetHwm).toHaveBeenLastCalledWith({}, 'synthesis_summary', '2026-03-25T10:00:00Z')
+  })
+
+  it('advances on record.cursor when the feed supplies one (a row kept after the mark), never on its older created_at', async () => {
+    const kept = { ...mockRecord, id: 7, created_at: '2026-09-21T10:00:00.000Z', cursor: '2026-09-26T08:00:00.000Z' }
+    mockPull.mockResolvedValueOnce({ records: [kept] })
+    mockWrapChunk.mockResolvedValueOnce('wrapped')
+    const store = makeMockStore(false)
+    await new IngestionPipeline(mockConfig, store as never, makeMockEmbedder() as never).run()
+    expect(store.insert).toHaveBeenCalledTimes(1)
+    expect(mockSetHwm).toHaveBeenLastCalledWith({}, 'synthesis_summary', '2026-09-26T08:00:00.000Z')
+  })
+
+  it('never moves the mark backward (an old-shaped record behind the mark leaves it alone)', async () => {
+    mockLoadHwm.mockReturnValue({ synthesis_summary: '2026-09-25T00:00:00.000Z' })
+    const behind = { ...mockRecord, id: 8, created_at: '2026-09-21T10:00:00.000Z' }
+    mockPull.mockResolvedValueOnce({ records: [behind] })
+    mockWrapChunk.mockResolvedValueOnce('wrapped')
+    const store = makeMockStore(false)
+    await new IngestionPipeline(mockConfig, store as never, makeMockEmbedder() as never).run()
+    expect(store.insert).toHaveBeenCalledTimes(1)          // still indexed (idempotent on id)
+    expect(mockSetHwm).not.toHaveBeenCalled()             // but the mark stays put
   })
 
   it('processes a new record: calls wrapChunk, embed, store.insert, saves HWM', async () => {

@@ -62,6 +62,22 @@ export function extractTags(record: IngestRecord): string[] {
   return [...combined]
 }
 
+/**
+ * The mark a record moves the HWM to, or null to leave it. Advances on the feed's cursor when it has
+ * one (companion_journal: when the row became memory), else created_at -- and NEVER moves backward:
+ * with a cursor feed a row's created_at can be far behind the mark (kept today, created last week),
+ * and setting the mark from it would re-page the same rows, which with LIMIT 100 can stall.
+ */
+export function hwmAfter(current: string | undefined, record: IngestRecord): string | null {
+  const next = record.cursor ?? record.created_at
+  if (!next) return null
+  if (!current) return next
+  const a = Date.parse(current)
+  const b = Date.parse(next)
+  if (Number.isFinite(a) && Number.isFinite(b) && b <= a) return null
+  return next
+}
+
 export class IngestionPipeline {
   constructor(
     private config: IngestionConfig,
@@ -91,17 +107,27 @@ export class IngestionPipeline {
 
         // Skip machine-generated journal entries -- embedding them pollutes
         // semantic search and creates feedback loops on re-ingest.
+        const advance = () => {
+          const to = hwmAfter(getHwm(hwm, source), record)
+          if (to === null) return
+          hwm = setHwm(hwm, source, to)
+          saveHwm(this.config.hwmPath, hwm)
+        }
+
         if (isMachineGenerated(record)) {
           console.log(`[ingestion] skip machine-generated ${chunkId}`)
-          hwm = setHwm(hwm, source, record.created_at)
-          saveHwm(this.config.hwmPath, hwm)
+          advance()
           continue
         }
 
-        // Dedup: skip if already indexed (unless this is an update sweep -- delete and re-index)
+        // Dedup: skip if already indexed (unless this is an update sweep -- delete and re-index).
+        // Idempotent on id (vault_path = rag/<type>/<id>), so a rewound mark re-pulls safely. The mark
+        // advances past a duplicate too (2026-09-26): it IS indexed, and a page of 100 duplicates that
+        // never moved the mark would be fetched again every cycle, forever.
         if (this.store.existsByPath(vaultPath)) {
           if (!isUpdate) {
             console.log(`[ingestion] skip duplicate ${chunkId}`)
+            advance()
             continue
           }
           this.store.deleteByPath(vaultPath)
@@ -136,8 +162,7 @@ export class IngestionPipeline {
           })
 
           // Advance HWM per-record (only after successful index)
-          hwm = setHwm(hwm, source, record.created_at)
-          saveHwm(this.config.hwmPath, hwm)
+          advance()
 
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err)

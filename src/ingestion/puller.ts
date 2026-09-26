@@ -32,10 +32,11 @@ export const ALL_PULLERS: Array<{ source: string; pull: PullFn; isUpdate?: boole
 ]
 
 // Exported so tests can verify URL construction directly.
-export function buildUrl(base: string, path: string, since?: string, limit = 100): string {
+export function buildUrl(base: string, path: string, since?: string, limit = 100, extra: Record<string, string> = {}): string {
   const url = new URL(path, base)
   if (since) url.searchParams.set('since', since)
   url.searchParams.set('limit', String(limit))
+  for (const [k, v] of Object.entries(extra)) url.searchParams.set(k, v)
   return url.toString()
 }
 
@@ -163,6 +164,8 @@ interface RawCompanionJournal {
   created_at: string
   agent: string
   note_text: string
+  /** halseth >= tray pass 2 with cursor=reviewed: when the row became memory (normalised ISO). */
+  cursor_at?: string
   [key: string]: unknown
 }
 
@@ -171,15 +174,23 @@ export async function pullCompanionJournal(
   since?: string,
 ): Promise<PullerResult> {
   try {
-    const url = buildUrl(config.halsethUrl, '/companion-journal', since)
+    // cursor=reviewed (halseth tray pass 2, 2026-09-26): order/filter on when a row became MEMORY, so
+    // a draft kept after the mark is still pulled. An older halseth ignores the param and returns no
+    // cursor_at; the record then falls back to created_at and nothing changes.
+    const url = buildUrl(config.halsethUrl, '/companion-journal', since, 100, { cursor: 'reviewed' })
     const raw = await fetchRecords(url, config.halsethSecret)
-    const records: IngestRecord[] = (raw as RawCompanionJournal[]).map((rec) => ({
-      id: rec.id,
-      source_type: 'companion_journal',
-      content: JSON.stringify(rec),
-      created_at: rec.created_at,
-      companion_id: rec.agent,
-    }))
+    const records: IngestRecord[] = (raw as RawCompanionJournal[]).map((rec) => {
+      // cursor_at is transport, not content: keep it out of the vault document.
+      const { cursor_at, ...row } = rec
+      return {
+        id: rec.id,
+        source_type: 'companion_journal',
+        content: JSON.stringify(row),
+        created_at: rec.created_at,
+        ...(typeof cursor_at === 'string' && cursor_at ? { cursor: cursor_at } : {}),
+        companion_id: rec.agent,
+      }
+    })
     return { records }
   } catch (e) {
     return { records: [], error: (e as Error).message }

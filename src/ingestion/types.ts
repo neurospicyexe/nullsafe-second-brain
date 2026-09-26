@@ -24,6 +24,13 @@ export interface IngestRecord {
   source_type: SourceType
   content: string        // serialized JSON of the raw record
   created_at: string     // ISO timestamp
+  /**
+   * What the high-water mark advances on, when the feed supplies one (halseth tray pass 2,
+   * 2026-09-26). companion_journal: halseth's `cursor_at` = COALESCE(reviewed_at, created_at) -- the
+   * moment a row became memory -- so a draft kept after the mark is still pulled. Absent (an older
+   * halseth, or any other source): the mark advances on created_at, as it always has.
+   */
+  cursor?: string
   companion_id?: string  // cypher | drevan | gaia | null (cross-companion)
   thread_key?: string
 }
