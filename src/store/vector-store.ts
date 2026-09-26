@@ -25,9 +25,15 @@ import { recencyBoost, recencyWeight, recencyHalfLifeDays } from "./recency.js";
 const NOT_CHATTER_SQL = "COALESCE(section, '') != 'discord-live'";
 
 /**
- * A COMPANION'S OWN LIVE LINES ARE NEVER RECALL (2026-09-26; halseth mig 0132, the imp tray).
+ * NO COMPANION'S LIVE LINES ARE RECALL (2026-09-26; halseth mig 0132, the imp tray).
  *
- * A discord-live doc with `companion` set is a companion's own reply, mirrored here by the bots'
+ * Scope, stated plainly (2026-09-26 review): this excludes EVERY companion's discord-live lines,
+ * not only the searching companion's own -- the filter has no agent term, so Cypher's recall
+ * skips Drevan's lines too. That matches Raziel's ruling rather than falling short of it:
+ * unreviewed companion speech stays out of recall, whoever spoke it. The constant was first named
+ * "own speech", which read as narrower than what it does.
+ *
+ * A discord-live doc with `companion` set is a companion's reply, mirrored here by the bots'
  * liveIngest at the moment of speaking. Nobody reviewed it. On 2026-09-26 Drevan fabricated a number,
  * four writers memorialised his reply within seconds, and his own recall returned the fabrication ranked
  * first. Halseth now holds such rows as drafts until the owner keeps them; this store has no review
@@ -36,7 +42,7 @@ const NOT_CHATTER_SQL = "COALESCE(section, '') != 'discord-live'";
  * recallable -- they are what was actually said TO the companion. Applied in hybridSearch (pool 1 and
  * recall mode); pools 2/3 already exclude all of discord-live via NOT_CHATTER_SQL.
  */
-const NOT_OWN_SPEECH_SQL = "NOT (COALESCE(section, '') = 'discord-live' AND companion IS NOT NULL)";
+const NOT_COMPANION_SPEECH_SQL = "NOT (COALESCE(section, '') = 'discord-live' AND companion IS NOT NULL)";
 
 export interface ChunkInsert {
   vault_path: string;
@@ -648,12 +654,12 @@ export class VectorStore {
       const ids = [...candidateRowids].slice(0, 900);
       const placeholders = ids.map(() => "?").join(",");
       rows = this.db.prepare(
-        `SELECT rowid, * FROM embeddings WHERE rowid IN (${placeholders}) AND ${NOT_OWN_SPEECH_SQL}`
+        `SELECT rowid, * FROM embeddings WHERE rowid IN (${placeholders}) AND ${NOT_COMPANION_SPEECH_SQL}`
       ).all(...ids) as Record<string, unknown>[];
     } else {
       // No lexical hits and no ANN (e.g. extension unavailable): novelty-ordered sample fallback.
       rows = this.db.prepare(
-        `SELECT rowid, * FROM embeddings WHERE ${NOT_OWN_SPEECH_SQL} ORDER BY novelty_score DESC LIMIT 500`
+        `SELECT rowid, * FROM embeddings WHERE ${NOT_COMPANION_SPEECH_SQL} ORDER BY novelty_score DESC LIMIT 500`
       ).all() as Record<string, unknown>[];
     }
 
