@@ -14,7 +14,7 @@ import { runInboxFiler, buildClassifyPrompt, parseDecision } from './inbox-filer
 import { callDeepSeek } from './deepseek-client.js'
 import { Indexer } from '../indexer.js'
 import { cronHealth } from './cron-health.js'
-import { runRecallReconcile } from './recall-reconcile.js'
+import { runRecallReconcile, runLedgerReconcile } from './recall-reconcile.js'
 
 // NOTE: pattern-synthesizer.ts (runPatternSynthesis / runSignalAudit) is
 // retired as of migration 0062. The autonomous worker now writes structured
@@ -62,6 +62,13 @@ export function startIngestionScheduler(
       await runRecallReconcile(config, store, { forceFull })
     } catch (err) {
       console.error(`[recall-reconcile] error: ${err instanceof Error ? err.message : String(err)}`)
+    }
+    // The ledger lane's purge (2026-09-26): drop ledger <id> -> rag/ledger/<id> gone. Own marks, same
+    // cadence; runs after the journal feed and before the pull, never fatal to either.
+    try {
+      await runLedgerReconcile(config, store, { forceFull })
+    } catch (err) {
+      console.error(`[ledger-reconcile] error: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
 

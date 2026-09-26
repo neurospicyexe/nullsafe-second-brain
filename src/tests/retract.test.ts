@@ -1,7 +1,7 @@
 // The discord-live path is written in one place (POST /ingest/discord) and now read back in one
 // place (POST /retract); both go through this helper so they can never disagree on the shape.
 import { describe, it, expect } from "vitest";
-import { discordLivePath, parseRetractBody } from "../retract.js";
+import { discordLivePath, parseRetractBody, ledgerMirrorPath } from "../retract.js";
 
 describe("discordLivePath", () => {
   it("matches the ingest path shape exactly", () => {
@@ -30,5 +30,17 @@ describe("parseRetractBody", () => {
     expect(parseRetractBody({ vault_path: "../discord-live/x.md" })).toEqual({ error: expect.any(String) });
     expect(parseRetractBody({})).toEqual({ error: expect.any(String) });
     expect(parseRetractBody({ message_id: "" })).toEqual({ error: expect.any(String) });
+  });
+});
+
+describe("rag/ledger/ -- the ledger lane's mirrors (2026-09-26, imp-lane)", () => {
+  it("is retractable: a dropped ledger line's chunk must be purgeable", () => {
+    expect(parseRetractBody({ vault_path: "rag/ledger/led_0f3c" })).toEqual({ path: "rag/ledger/led_0f3c" });
+    expect(ledgerMirrorPath("led_0f3c")).toBe("rag/ledger/led_0f3c");
+  });
+  it("does not open other rag/ families or traversal", () => {
+    expect(parseRetractBody({ vault_path: "rag/ledgerx/1" })).toEqual({ error: expect.any(String) });
+    expect(parseRetractBody({ vault_path: "rag/ledger/../../raziel/x.md" })).toEqual({ error: expect.any(String) });
+    expect(parseRetractBody({ vault_path: "rag/historical_corpus/a/0" })).toEqual({ error: expect.any(String) });
   });
 });

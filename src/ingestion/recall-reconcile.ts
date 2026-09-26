@@ -23,16 +23,50 @@
 // with the doc gone existsByPath is false, so the pipeline indexes it again. A released row that is
 // RESTORED is re-served the same way (halseth's feed includes rows restored since the mark).
 //
+// LEDGER (2026-09-26, imp-lane tranche 1): the same mechanics serve a second feed. When an owner says
+// `drop ledger <id>`, Halseth lists the id on GET /ingest/ledger-ineligible and this deletes its
+// rag/ledger/<id> mirror -- Drevan's "a drop purges the chunk". Own marks (ledger_ineligible /
+// ledger_reconcile_full_at), same incremental-every-tick + full-sweep cadence. The item cursor is read
+// as cursor_at, else state_at (when it was dropped). A dropped row is never re-served by /ingest/ledger
+// (open + kept only), so a purged mirror stays purged.
+//
 // ORDERING: runs inside the pipeline's tick guard, BEFORE the pull. Were a pull to land between this
 // job's list fetch and its deletes, it could see a mirror as present, advance past a row kept in that
 // window, and then have the mirror deleted with nothing left to re-serve it.
 
 import type { IngestionConfig } from './types.js'
 import { loadHwm, saveHwm, getHwm, setHwm } from './hwm.js'
-import { retractPath, journalMirrorPath, type RetractableStore } from '../retract.js'
+import { retractPath, journalMirrorPath, ledgerMirrorPath, type RetractableStore } from '../retract.js'
 
 export const RECONCILE_HWM_KEY = 'recall_ineligible_journal'
 export const RECONCILE_FULL_AT_KEY = 'recall_reconcile_full_at'
+// The ledger lane's purge feed (2026-09-26, imp-lane tranche 1): its OWN marks, so the two feeds never
+// share a cursor or a full-sweep clock.
+export const LEDGER_RECONCILE_HWM_KEY = 'ledger_ineligible'
+export const LEDGER_RECONCILE_FULL_AT_KEY = 'ledger_reconcile_full_at'
+
+/**
+ * One purge feed: a Halseth list of ids that must not be in the index, and the mirror path each id
+ * was indexed at. The journal feed (recall-ineligible) and the ledger feed (ledger-ineligible: rows the
+ * owner DROPPED -- Drevan's "a drop purges the chunk") share every mechanic below.
+ */
+export interface ReconcileFeed {
+  label: string
+  endpoint: string
+  hwmKey: string
+  fullAtKey: string
+  mirrorPath: (id: string | number) => string
+}
+
+export const JOURNAL_RECONCILE_FEED: ReconcileFeed = {
+  label: 'recall-reconcile', endpoint: '/ingest/recall-ineligible',
+  hwmKey: RECONCILE_HWM_KEY, fullAtKey: RECONCILE_FULL_AT_KEY, mirrorPath: journalMirrorPath,
+}
+
+export const LEDGER_RECONCILE_FEED: ReconcileFeed = {
+  label: 'ledger-reconcile', endpoint: '/ingest/ledger-ineligible',
+  hwmKey: LEDGER_RECONCILE_HWM_KEY, fullAtKey: LEDGER_RECONCILE_FULL_AT_KEY, mirrorPath: ledgerMirrorPath,
+}
 export const RECONCILE_PAGE_LIMIT = 500
 /** Hard stop on paging: 200 pages x 500 = 100k ids, far past the table (6.6k rows on 2026-09-26). */
 export const RECONCILE_MAX_PAGES = 200
@@ -43,6 +77,8 @@ export interface IneligibleItem {
   review_state?: string
   archived?: number
   cursor_at?: string
+  /** ledger-ineligible: when the row was dropped (read as the cursor when cursor_at is absent). */
+  state_at?: string
 }
 
 interface IneligiblePage {
@@ -63,20 +99,21 @@ export interface ReconcileResult {
 type FetchFn = typeof fetch
 
 async function fetchPage(
+  feed: ReconcileFeed,
   config: IngestionConfig,
   params: Record<string, string>,
   fetchImpl: FetchFn,
 ): Promise<IneligiblePage> {
-  const url = new URL('/ingest/recall-ineligible', config.halsethUrl)
+  const url = new URL(feed.endpoint, config.halsethUrl)
   url.searchParams.set('limit', String(RECONCILE_PAGE_LIMIT))
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v)
   const res = await fetchImpl(url.toString(), {
     headers: { Authorization: `Bearer ${config.halsethSecret}` },
     signal: AbortSignal.timeout(15_000),
   })
-  if (!res.ok) throw new Error(`Halseth recall-ineligible ${res.status} ${res.statusText}`)
+  if (!res.ok) throw new Error(`Halseth ${feed.endpoint} ${res.status} ${res.statusText}`)
   const body = await res.json() as Partial<IneligiblePage>
-  if (!body || !Array.isArray(body.items)) throw new Error('Halseth recall-ineligible: malformed response (no items[])')
+  if (!body || !Array.isArray(body.items)) throw new Error(`Halseth ${feed.endpoint}: malformed response (no items[])`)
   return { items: body.items, next: body.next ?? null, mode: body.mode }
 }
 
@@ -98,18 +135,38 @@ export function fullSweepDue(fullAt: string | undefined, fullEveryMinutes: numbe
   return now - t >= fullEveryMinutes * 60_000
 }
 
+type ReconcileOpts = { forceFull?: boolean; now?: () => number; fetchImpl?: FetchFn }
+
 export async function runRecallReconcile(
   config: IngestionConfig,
   store: RetractableStore,
-  opts: { forceFull?: boolean; now?: () => number; fetchImpl?: FetchFn } = {},
+  opts: ReconcileOpts = {},
+): Promise<ReconcileResult> {
+  return runFeedReconcile(JOURNAL_RECONCILE_FEED, config, store, opts)
+}
+
+/** Purge rag/ledger/<id> for every ledger row the owner dropped (GET /ingest/ledger-ineligible). */
+export async function runLedgerReconcile(
+  config: IngestionConfig,
+  store: RetractableStore,
+  opts: ReconcileOpts = {},
+): Promise<ReconcileResult> {
+  return runFeedReconcile(LEDGER_RECONCILE_FEED, config, store, opts)
+}
+
+export async function runFeedReconcile(
+  feed: ReconcileFeed,
+  config: IngestionConfig,
+  store: RetractableStore,
+  opts: ReconcileOpts = {},
 ): Promise<ReconcileResult> {
   const now = opts.now ?? Date.now
   const fetchImpl = opts.fetchImpl ?? fetch
   const startedAt = new Date(now()).toISOString()
   let hwm = loadHwm(config.hwmPath)
-  const mark = getHwm(hwm, RECONCILE_HWM_KEY)
+  const mark = getHwm(hwm, feed.hwmKey)
   const full = opts.forceFull === true || !mark ||
-    fullSweepDue(getHwm(hwm, RECONCILE_FULL_AT_KEY), config.recallReconcileFullMinutes ?? 60, now())
+    fullSweepDue(getHwm(hwm, feed.fullAtKey), config.recallReconcileFullMinutes ?? 60, now())
 
   const result: ReconcileResult = { mode: full ? 'full' : 'incremental', pages: 0, listed: 0, removed_docs: 0, removed_rows: 0 }
   let maxCursor = mark
@@ -118,20 +175,20 @@ export async function runRecallReconcile(
   try {
     for (;;) {
       if (result.pages >= RECONCILE_MAX_PAGES) throw new Error(`stopped after ${RECONCILE_MAX_PAGES} pages (paging did not converge)`)
-      const page = await fetchPage(config, params, fetchImpl)
+      const page = await fetchPage(feed, config, params, fetchImpl)
       result.pages++
       for (const item of page.items) {
         if (typeof item?.id !== 'string' && typeof item?.id !== 'number') continue
         result.listed++
-        const n = retractPath(store, journalMirrorPath(item.id))
+        const n = retractPath(store, feed.mirrorPath(item.id))
         if (n > 0) { result.removed_docs++; result.removed_rows += n }
-        maxCursor = laterOf(maxCursor, item.cursor_at)
+        maxCursor = laterOf(maxCursor, item.cursor_at ?? item.state_at)
       }
       // An INCREMENTAL mark advances per page: those pages are ordered by cursor, so everything up to
       // the last cursor on this page is reconciled even if a later page fails. A FULL sweep pages by
       // id, not cursor, so it moves the mark only once it has completed (below).
-      if (!full && maxCursor && maxCursor !== getHwm(hwm, RECONCILE_HWM_KEY)) {
-        hwm = setHwm(hwm, RECONCILE_HWM_KEY, maxCursor)
+      if (!full && maxCursor && maxCursor !== getHwm(hwm, feed.hwmKey)) {
+        hwm = setHwm(hwm, feed.hwmKey, maxCursor)
         saveHwm(config.hwmPath, hwm)
       }
       if (!page.next) break
@@ -144,15 +201,15 @@ export async function runRecallReconcile(
     if (full) {
       // Stamp the START: anything that changed while the sweep ran is within the next sweep's reach.
       // A full sweep that completes with an empty list still arms the incremental path from now.
-      hwm = setHwm(hwm, RECONCILE_HWM_KEY, maxCursor ?? startedAt)
-      hwm = setHwm(hwm, RECONCILE_FULL_AT_KEY, startedAt)
+      hwm = setHwm(hwm, feed.hwmKey, maxCursor ?? startedAt)
+      hwm = setHwm(hwm, feed.fullAtKey, startedAt)
       saveHwm(config.hwmPath, hwm)
     }
   } catch (err) {
     result.error = err instanceof Error ? err.message : String(err)
   }
 
-  const line = `[recall-reconcile] ${result.mode}: pages=${result.pages} listed=${result.listed} ` +
+  const line = `[${feed.label}] ${result.mode}: pages=${result.pages} listed=${result.listed} ` +
     `removed_docs=${result.removed_docs} removed_rows=${result.removed_rows}`
   if (result.error) console.error(`${line} error=${result.error}`)
   else console.log(line)

@@ -29,8 +29,9 @@ export function parseRetractBody(body: unknown): RetractParse {
   // discord-live (the 7-day recency lane) and the rag/ mirrors of Halseth D1 rows (rebuildable
   // copies of companion_journal / wm_continuity_notes, each wrapped in a synthesis "book report").
   // Both are derived stores; D1 is truth. The vault proper (raziel/, canon/, sessions...) is not
-  // reachable from here.
-  const RETRACTABLE = ["discord-live/", "rag/companion_journal/", "rag/wm_continuity_notes/"];
+  // reachable from here. rag/ledger/ (2026-09-26, imp-lane): the verbatim mirrors of ledger_entries
+  // rows -- Drevan's "a drop purges the chunk"; the ledger reconcile uses the same delete.
+  const RETRACTABLE = ["discord-live/", "rag/companion_journal/", "rag/wm_continuity_notes/", "rag/ledger/"];
   if (path.includes("..") || !RETRACTABLE.some(prefix => path.startsWith(prefix))) {
     return { error: "retract only reaches the discord-live layer and the rag/ mirrors of D1 rows; the vault proper is not retractable here" };
   }
@@ -58,4 +59,9 @@ export function retractPath(store: RetractableStore, vaultPath: string): number 
 /** The rag/ mirror path of a companion_journal row, exactly as the ingestion pipeline writes it. */
 export function journalMirrorPath(id: string | number): string {
   return `rag/companion_journal/${id}`;
+}
+
+/** The rag/ mirror path of a ledger_entries row, exactly as the ingestion pipeline writes it (2026-09-26). */
+export function ledgerMirrorPath(id: string | number): string {
+  return `rag/ledger/${id}`;
 }

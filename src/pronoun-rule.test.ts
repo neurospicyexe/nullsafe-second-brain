@@ -4,7 +4,8 @@
 // prod. Ingestion here writes prose too (wrap preambles, gap-fill companion notes), so every
 // direct-fetch caller must carry the rule. This asserts the module is idempotent and that the
 // three ingestion callers (the shared client, the wrap preamble, and gap-detector's own local
-// caller) each send it as a system message.
+// caller) each send it as a system message. (2026-09-26: the gap-detector no longer calls a model at
+// all -- it is the deterministic ledger gap-reader -- so two callers remain.)
 
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { OWNER_PRONOUN_RULE, withOwnerPronounRule } from './pronoun-rule.js'
