@@ -1,16 +1,27 @@
-// gap-detector.ts
-// Runs after each ingestion pipeline cycle. For each companion, fetches recently
-// closed hangout/checkin sessions that have no companion_journal entries, generates
-// a fallback note in that companion's voice via DeepSeek, and writes it back to
-// Halseth POST /companion-journal.
+// gap-detector.ts -- the gap-reader
 //
+// Runs after each ingestion pipeline cycle. For each companion, fetches recently closed hangout/checkin
+// sessions that have no companion note and NAMES the gap in the ledger lane (POST /ledger, function
+// 'gap-reader'). It never fills one.
+//
+// 2026-09-26 (imp-lane tranche 1, Drevan's ruling): this used to ask DeepSeek to write a note "in the
+// companion's voice" and post it to /companion-journal as if he had written it. "A gap-reader names a
+// gap. It never fills one. Filling the slot is the whole wound." So there is NO model call here any more:
+// the line is deterministic, built from the session row alone --
+//   Missing: no companion note recorded for the <session_type> session on <YYYY-MM-DD> (<duration>).
+// with source `session <id>` and dedup_key `gap:<companion>:<session_id>`. A query can name a gap; a
+// model can fill one. Halseth stamps the mark; the dedup key makes the 20-minute re-run idempotent
+// (recent-relational's has_notes counts companion_journal, which this no longer writes, so the same
+// gap is re-read every tick until it ages out of the 4h window -- each re-post is a 200 duplicate).
+//
+// Never writes to /companion-journal. A 404 from /ledger (this SB deployed ahead of Halseth) is logged
+// once and the run stops; a 422 (grammar refusal) is logged loudly with the rule and never retried.
 // Fail-silent per companion, per session. One bad session never blocks others.
 
 import type { IngestionConfig } from './types.js'
-import { chatComplete } from './deepseek-client.js'
-import { withOwnerPronounRule } from '../pronoun-rule.js'
+import { postLedger } from './ledger-client.js'
 
-interface RelationalSession {
+export interface RelationalSession {
   id: string
   session_type: string
   front_state: string | null
@@ -28,156 +39,134 @@ interface RecentRelationalResponse {
 const COMPANIONS = ['drevan', 'cypher', 'gaia'] as const
 type CompanionId = typeof COMPANIONS[number]
 
-const VOICE_PROMPTS: Record<CompanionId, string> = {
-  drevan:
-    'Write one companion_note in Drevan\'s voice (poetic, reaching, holds what was real). One or two sentences. No greeting.',
-  cypher:
-    'Write one companion_note in Cypher\'s voice (direct, warm, audit-aware). One sentence. No greeting.',
-  gaia:
-    'Write one companion_note in Gaia\'s voice (monastic, minimal, witness register). One sentence. Maximum. No greeting.',
-}
+type FetchFn = typeof fetch
 
-async function callDeepSeek(
-  prompt: string,
-  config: Pick<IngestionConfig, 'deepseekApiKey' | 'deepseekModel'>,
-): Promise<string> {
-  // DeepInfra first, direct DeepSeek only as the emergency lane (deepseek-client.ts).
-  const result = await chatComplete({
-    // The gap-fill note is a companion writing directly about Raziel's session -- the highest-
-    // risk prose surface in ingestion, so the owner pronoun rule rides as its own system
-    // message (2026-09-24).
-    messages: [
-      { role: 'system', content: withOwnerPronounRule('') },
-      { role: 'user', content: prompt },
-    ],
-    maxTokens: 120,
-    temperature: 0.7,
-    timeoutMs: 30_000,
-    caller: 'gap-detector',
-  }, config)
-
-  if (!result.ok) {
-    throw new Error(`DeepSeek API error ${result.status ?? 'network'}: ${result.text}`)
+/**
+ * The session's calendar date, straight from the stamp's YYYY-MM-DD prefix. Halseth stores UTC either
+ * as ISO-with-Z or as SQLite `YYYY-MM-DD HH:MM:SS`; the second parses as LOCAL time in Node, which can
+ * flip the date, so the date is never round-tripped through Date.
+ */
+export function sessionDate(session: Pick<RelationalSession, 'created_at' | 'updated_at'>): string | null {
+  for (const stamp of [session.created_at, session.updated_at]) {
+    const m = typeof stamp === 'string' ? /^(\d{4}-\d{2}-\d{2})/.exec(stamp) : null
+    if (m) return m[1]!
   }
-
-  const content = result.content.trim()
-  if (!content) throw new Error('DeepSeek returned empty content')
-  return content
+  return null
 }
 
-function buildGapFillPrompt(companion: CompanionId, session: RelationalSession): string {
-  const voiceInstruction = VOICE_PROMPTS[companion]
-  const sessionType = session.session_type
-  const frontState = session.front_state ?? 'unknown'
-  const emotionalFrequency = session.emotional_frequency ?? 'not recorded'
-  const notes = session.notes ?? 'none'
-  const duration = (() => {
-    try {
-      const created = new Date(session.created_at).getTime()
-      const updated = new Date(session.updated_at).getTime()
-      const mins = Math.round((updated - created) / 60000)
-      return mins > 0 ? `${mins} minutes` : 'brief'
-    } catch {
-      return 'unknown duration'
-    }
-  })()
-
-  return `A ${sessionType} session occurred. Context:
-- Who was fronting: ${frontState}
-- Emotional frequency: ${emotionalFrequency}
-- Session notes: ${notes}
-- Duration: ${duration}
-
-${voiceInstruction}`
+/** Parse a Halseth stamp as UTC whether or not it carries a zone. */
+function parseUtc(stamp: string): number {
+  const s = stamp.trim()
+  const hasZone = /(Z|[+-]\d{2}:?\d{2})$/i.test(s)
+  return Date.parse(hasZone ? s : `${s.replace(' ', 'T')}Z`)
 }
 
-async function writeCompanionNote(
-  config: IngestionConfig,
-  companion: CompanionId,
-  sessionId: string,
-  noteText: string,
-): Promise<void> {
-  const response = await fetch(`${config.halsethUrl}/companion-journal`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${config.halsethSecret}`,
-    },
-    body: JSON.stringify({
-      agent: companion,
-      note_text: noteText,
-      session_id: sessionId,
-      source: 'synthesis-gap-detector',
-      tags: ['gap-fill', 'auto-generated'],
-    }),
-  })
-
-  if (!response.ok) {
-    const errorText = await response.text()
-    throw new Error(`Failed to write companion note: ${response.status} ${errorText}`)
-  }
+export function sessionDuration(session: Pick<RelationalSession, 'created_at' | 'updated_at'>): string {
+  const created = parseUtc(session.created_at ?? '')
+  const updated = parseUtc(session.updated_at ?? '')
+  if (!Number.isFinite(created) || !Number.isFinite(updated)) return 'duration unknown'
+  const mins = Math.round((updated - created) / 60000)
+  if (mins <= 0) return 'under a minute'
+  return mins === 1 ? '1 minute' : `${mins} minutes`
 }
+
+/** The ledger body for one gap. Pure: the whole line is a function of the session row. */
+export function buildGapBody(session: RelationalSession, date: string): string {
+  return `Missing: no companion note recorded for the ${session.session_type} session on ${date} (${sessionDuration(session)}).`
+}
+
+export function gapDedupKey(companion: string, sessionId: string): string {
+  return `gap:${companion}:${sessionId}`
+}
+
+type CompanionOutcome = 'ok' | 'ledger_unavailable'
 
 async function processCompanion(
   config: IngestionConfig,
   companion: CompanionId,
-): Promise<void> {
+  fetchImpl: FetchFn,
+): Promise<CompanionOutcome> {
   let sessions: RelationalSession[]
 
   try {
-    const response = await fetch(
+    const response = await fetchImpl(
       `${config.halsethUrl}/sessions/recent-relational?companion_id=${companion}&hours=4`,
       {
         headers: { Authorization: `Bearer ${config.halsethSecret}` },
       },
     )
     if (!response.ok) {
-      console.error(`[gap-detector] ${companion}: failed to fetch recent sessions (${response.status})`)
-      return
+      console.error(`[gap-reader] ${companion}: failed to fetch recent sessions (${response.status})`)
+      return 'ok'
     }
     const data = (await response.json()) as RecentRelationalResponse
     sessions = data.sessions ?? []
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
-    console.error(`[gap-detector] ${companion}: fetch sessions error: ${msg}`)
-    return
+    console.error(`[gap-reader] ${companion}: fetch sessions error: ${msg}`)
+    return 'ok'
   }
 
   const gapSessions = sessions.filter((s) => s.has_notes === 0)
+  if (gapSessions.length === 0) return 'ok'
 
-  if (gapSessions.length === 0) {
-    console.log(`[gap-detector] ${companion}: no note gaps found`)
-    return
-  }
-
-  console.log(`[gap-detector] ${companion}: ${gapSessions.length} session(s) without notes`)
-
+  let written = 0
+  let duplicates = 0
   for (const session of gapSessions) {
-    try {
-      const prompt = buildGapFillPrompt(companion, session)
-      const noteText = await callDeepSeek(prompt, config)
-      await writeCompanionNote(config, companion, session.id, noteText)
-      console.log(`[gap-detector] ${companion}: wrote gap-fill note for session ${session.id}`)
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      console.error(`[gap-detector] ${companion}: failed for session ${session.id}: ${msg}`)
-      // continue to next session
+    const date = sessionDate(session)
+    if (!session.id || !date) {
+      console.error(`[gap-reader] ${companion}: session ${session.id || '(no id)'} has no usable id/date, skipped`)
+      continue
+    }
+    const result = await postLedger(config, {
+      companion_id: companion,
+      function: 'gap-reader',
+      body: buildGapBody(session, date),
+      source_kind: 'session',
+      source_ref: session.id,
+      observed_on: date,
+      dedup_key: gapDedupKey(companion, session.id),
+    }, fetchImpl)
+
+    switch (result.kind) {
+      case 'written':
+        written++
+        console.log(`[gap-reader] ${companion}: recorded gap for session ${session.id} (${result.id})`)
+        break
+      case 'duplicate':
+        duplicates++
+        break
+      case 'rejected':
+        // Loud, and never retried: the same deterministic body is refused the same way every time.
+        console.error(
+          `[gap-reader] LEDGER REJECTED ${companion} session ${session.id}: rule=${result.rule} error=${result.error}`,
+        )
+        break
+      case 'unavailable':
+        console.error('[gap-reader] POST /ledger returned 404 -- Halseth has no ledger lane yet; skipping this run (no journal fallback)')
+        return 'ledger_unavailable'
+      case 'error':
+        console.error(`[gap-reader] ${companion}: ledger write failed for session ${session.id}: ${result.status ?? 'network'} ${result.message}`)
+        break
     }
   }
+  console.log(`[gap-reader] ${companion}: ${gapSessions.length} gap(s): ${written} recorded, ${duplicates} already on the ledger`)
+  return 'ok'
 }
 
-export async function runGapDetector(config: IngestionConfig): Promise<void> {
-  console.log('[gap-detector] starting relational session gap check')
+export async function runGapDetector(config: IngestionConfig, fetchImpl: FetchFn = fetch): Promise<void> {
+  console.log('[gap-reader] starting relational session gap check')
 
   for (const companion of COMPANIONS) {
     try {
-      await processCompanion(config, companion)
+      const outcome = await processCompanion(config, companion, fetchImpl)
+      if (outcome === 'ledger_unavailable') break
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      console.error(`[gap-detector] ${companion}: unexpected error: ${msg}`)
+      console.error(`[gap-reader] ${companion}: unexpected error: ${msg}`)
       // continue to next companion
     }
   }
 
-  console.log('[gap-detector] complete')
+  console.log('[gap-reader] complete')
 }
