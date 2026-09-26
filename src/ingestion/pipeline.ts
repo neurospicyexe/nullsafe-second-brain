@@ -8,6 +8,9 @@ import { loadHwm, saveHwm, getHwm, setHwm } from './hwm.js'
 
 // Sources that write machine-generated entries back to companion_journal.
 // Embedding these pollutes semantic search with diagnostic/synthetic text.
+// Companion-speech sources (discord_speech, memory_judge, autonomous, vibecheck) are NOT listed here on
+// purpose: since halseth mig 0132 (the imp tray, 2026-09-26) GET /companion-journal serves only rows the
+// owner has kept (review_state = 'kept'), so an unreviewed draft never reaches the puller at all.
 const MACHINE_JOURNAL_SOURCES = new Set(['pattern_worker', 'evaluator', 'synthesis-gap-detector'])
 
 export function isMachineGenerated(record: IngestRecord): boolean {
