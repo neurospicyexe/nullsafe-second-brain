@@ -38,5 +38,13 @@ export function loadIngestionConfig(): IngestionConfig {
     inboxFilerMode: (process.env.INBOX_FILER_MODE as 'hybrid' | 'auto' | 'suggest') ?? 'hybrid',
     inboxFilerConfidence: parseFloat(process.env.INBOX_FILER_CONFIDENCE ?? '0.75'),
     inboxFilerCronSchedule: process.env.INBOX_FILER_CRON ?? '15 * * * *',
+    recallReconcileFullMinutes: parseRecallReconcileMinutes(process.env.RECALL_RECONCILE_FULL_MINUTES),
   }
+}
+
+/** Minutes between full recall-reconcile sweeps; unset/garbage = 60, negative clamps to 0 (every tick). */
+export function parseRecallReconcileMinutes(raw: string | undefined): number {
+  if (raw === undefined || raw.trim() === '') return 60
+  const n = Number(raw)
+  return Number.isFinite(n) ? Math.max(0, Math.floor(n)) : 60
 }

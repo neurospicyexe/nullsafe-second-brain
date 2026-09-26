@@ -63,4 +63,7 @@ export interface IngestionConfig {
   inboxFilerMode?: 'hybrid' | 'auto' | 'suggest'  // INBOX_FILER_MODE (default 'hybrid')
   inboxFilerConfidence?: number            // INBOX_FILER_CONFIDENCE (default 0.75)
   inboxFilerCronSchedule?: string          // INBOX_FILER_CRON (default '15 * * * *', hourly)
+  // Recall reconcile (2026-09-26): minutes between FULL sweeps of halseth's recall-ineligible list;
+  // incremental passes ride every ingestion tick. 0 = full every tick. (recall-reconcile.ts)
+  recallReconcileFullMinutes?: number      // RECALL_RECONCILE_FULL_MINUTES (default 60)
 }

@@ -14,6 +14,7 @@ import { runInboxFiler, buildClassifyPrompt, parseDecision } from './inbox-filer
 import { callDeepSeek } from './deepseek-client.js'
 import { Indexer } from '../indexer.js'
 import { cronHealth } from './cron-health.js'
+import { runRecallReconcile } from './recall-reconcile.js'
 
 // NOTE: pattern-synthesizer.ts (runPatternSynthesis / runSignalAudit) is
 // retired as of migration 0062. The autonomous worker now writes structured
@@ -56,6 +57,19 @@ export function startIngestionScheduler(
   let inboxFilerRunning = false
   let thoughtformRunning = false
 
+  const reconcileRecall = async (forceFull: boolean): Promise<void> => {
+    try {
+      await runRecallReconcile(config, store, { forceFull })
+    } catch (err) {
+      console.error(`[recall-reconcile] error: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
+  // Startup: one FULL recall reconcile under the pipeline guard (a tick that fires meanwhile skips).
+  // A restart is exactly when a long-stale store most needs sweeping, and it must not wait for a tick.
+  pipelineRunning = true
+  void reconcileRecall(true).finally(() => { pipelineRunning = false })
+
   cron.schedule(config.cronSchedule, async () => {
     if (pipelineRunning) {
       console.warn('[ingestion] pipeline still running from previous tick, skipping')
@@ -65,6 +79,11 @@ export function startIngestionScheduler(
     console.log('[ingestion] cron tick: running pipeline')
     cronHealth.start('ingestion_pipeline')
     try {
+      // Recall reconcile FIRST, inside this guard: delete the rag/ mirrors of journal rows that stopped
+      // being memory (draft / dropped / archived). Before the pull on purpose -- see recall-reconcile.ts
+      // ORDERING. Never fatal to the pull; its own errors are logged with counts.
+      await reconcileRecall(false)
+
       await pipeline.run()
 
       // Re-index anything that landed in the vault while the embedder was unavailable. Cheap when the queue

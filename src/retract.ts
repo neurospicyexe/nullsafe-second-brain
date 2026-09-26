@@ -36,3 +36,26 @@ export function parseRetractBody(body: unknown): RetractParse {
   }
   return { path };
 }
+
+/** The two store calls a retract needs (VectorStore satisfies it; tests pass a real one too). */
+export interface RetractableStore {
+  countByPath(vaultPath: string): number;
+  deleteByPath(vaultPath: string): void;
+}
+
+/**
+ * THE delete path for a retracted document: every row at the path, its ANN vectors and (via the
+ * embeddings_ad trigger) its FTS rows. Returns how many rows were removed; 0 = nothing was there.
+ * POST /retract and the recall reconcile (ingestion/recall-reconcile.ts) both call this, so the two
+ * can never disagree on what "gone" means.
+ */
+export function retractPath(store: RetractableStore, vaultPath: string): number {
+  const before = store.countByPath(vaultPath);
+  if (before > 0) store.deleteByPath(vaultPath);
+  return before;
+}
+
+/** The rag/ mirror path of a companion_journal row, exactly as the ingestion pipeline writes it. */
+export function journalMirrorPath(id: string | number): string {
+  return `rag/companion_journal/${id}`;
+}

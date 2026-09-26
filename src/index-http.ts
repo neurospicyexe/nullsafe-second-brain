@@ -21,7 +21,7 @@ import type { SourceType, IngestRecord } from "./ingestion/types.js";
 import { IngestionPipeline } from "./ingestion/pipeline.js";
 import { evaluateSurprisal } from "./ingestion/surprisal-gate.js";
 import { checkApiKey } from "./http-auth.js";
-import { parseRetractBody } from "./retract.js";
+import { parseRetractBody, retractPath } from "./retract.js";
 import { contextPrefix } from "./indexer.js";
 
 // ── Startup ──────────────────────────────────────────────────────────────────
@@ -298,8 +298,7 @@ app.post("/retract", async (req: Request, res: Response): Promise<void> => {
       res.status(400).json({ error: parsed.error });
       return;
     }
-    const before = store.countByPath(parsed.path);
-    if (before > 0) store.deleteByPath(parsed.path);
+    const before = retractPath(store, parsed.path);
     console.log(`[retract] ${parsed.path}: ${before} row(s) removed`);
     res.json({ path: parsed.path, removed: before, existed: before > 0 });
   } catch (e) {
