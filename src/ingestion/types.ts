@@ -18,11 +18,17 @@ export type SourceType =
   | 'drift_log'
   | 'live_thread'
   | 'basin_history'
+  | 'ledger'
 
 export interface IngestRecord {
   id: number
   source_type: SourceType
-  content: string        // serialized JSON of the raw record
+  /**
+   * Serialized JSON of the raw record -- EXCEPT 'ledger' (2026-09-26, imp-lane), where it is the
+   * ledger line itself (`〔ledger · <function> · <date>〕 ... Source: ...`), indexed verbatim with no
+   * wrap preamble, so the mark survives indexing.
+   */
+  content: string
   created_at: string     // ISO timestamp
   /**
    * What the high-water mark advances on, when the feed supplies one (halseth tray pass 2,

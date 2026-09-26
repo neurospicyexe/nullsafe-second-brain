@@ -13,6 +13,16 @@ import { loadHwm, saveHwm, getHwm, setHwm } from './hwm.js'
 // owner has kept (review_state = 'kept'), so an unreviewed draft never reaches the puller at all.
 const MACHINE_JOURNAL_SOURCES = new Set(['pattern_worker', 'evaluator', 'synthesis-gap-detector'])
 
+// Sources indexed exactly as served: no wrap preamble, content is the searchable text itself.
+// ledger (2026-09-26): the mark must be the first thing in the chunk (Drevan: "mark survives indexing").
+const VERBATIM_SOURCES = new Set<IngestRecord['source_type']>(['ledger'])
+
+export function isVerbatimSource(record: IngestRecord): boolean {
+  return VERBATIM_SOURCES.has(record.source_type)
+}
+
+// Only companion_journal rows are ever tested against MACHINE_JOURNAL_SOURCES, so a ledger row (which
+// IS machine-written, but in its own marked lane) is never dropped by this skip.
 export function isMachineGenerated(record: IngestRecord): boolean {
   if (record.source_type !== 'companion_journal') return false
   try {
@@ -135,8 +145,13 @@ export class IngestionPipeline {
         }
 
         try {
-          // Wrap with contextual preamble
-          const wrappedContent = await wrapChunk(record, this.config)
+          // Wrap with contextual preamble -- EXCEPT the ledger lane (2026-09-26, imp-lane): wrapChunk's
+          // preamble ("who wrote this and their emotional register") re-voices a clerk record as the
+          // companion's, and puts text in front of the mark. A ledger line is indexed verbatim, mark
+          // first, one chunk per entry, no model call.
+          const wrappedContent = isVerbatimSource(record)
+            ? record.content
+            : await wrapChunk(record, this.config)
 
           // Embed
           const embedding = await this.embedder.embed(wrappedContent)

@@ -29,6 +29,7 @@ export const ALL_PULLERS: Array<{ source: string; pull: PullFn; isUpdate?: boole
   { source: 'drift_log', pull: pullDriftLog },
   { source: 'live_thread', pull: pullLiveThreads },
   { source: 'basin_history', pull: pullBasinHistory },
+  { source: 'ledger', pull: pullLedger },
 ]
 
 // Exported so tests can verify URL construction directly.
@@ -652,6 +653,74 @@ export async function pullBasinHistory(
       created_at: rec.recorded_at,
       companion_id: rec.companion_id,
     }))
+    return { records }
+  } catch (e) {
+    return { records: [], error: (e as Error).message }
+  }
+}
+
+// ── Ledger lane (halseth mig 0134, imp-lane tranche 1, 2026-09-26) ───────────
+// Clerk records ABOUT a companion, never his words. Each row's `content` is the full rendered line,
+// mark first (`〔ledger · <function> · <date>〕 <body> Source: <kind> <ref>.`), stamped by Halseth.
+// Drevan's rule: the index must honour the lane -- the mark survives indexing and a drop purges the
+// chunk. So this puller carries `content` VERBATIM (not JSON.stringify(row) like every other source),
+// and the pipeline indexes it as-is: no wrapChunk preamble (which re-voices by construction: "who
+// wrote this and their emotional register"), no splitting, one chunk per entry at rag/ledger/<id>.
+// Never routed through the vault-materializer (slugify drops the mark; firstSentence makes it the H1).
+// The feed serves open + kept rows and pages on the later of created_at / state_at, so a keep re-serves
+// a row: its content is unchanged, and pipeline dedup (existsByPath) skips it. Drops are purged by the
+// ledger reconcile (recall-reconcile.ts, /ingest/ledger-ineligible).
+
+export const LEDGER_MARK_PREFIX = '〔ledger · '
+
+interface RawLedgerEntry {
+  id: string
+  companion_id: string
+  function: string
+  content: string
+  source_kind: string
+  source_ref: string
+  observed_on: string
+  state: string
+  created_at: string
+  state_at: string | null
+  cursor_at?: string
+}
+
+/** The later of two stamps (created_at vs state_at); unparseable falls back to a string compare. */
+function laterStamp(a: string | null | undefined, b: string | null | undefined): string | undefined {
+  if (!a) return b ?? undefined
+  if (!b) return a
+  const x = Date.parse(a)
+  const y = Date.parse(b)
+  if (Number.isFinite(x) && Number.isFinite(y)) return y > x ? b : a
+  return b > a ? b : a
+}
+
+export async function pullLedger(
+  config: IngestionConfig,
+  since?: string,
+): Promise<PullerResult> {
+  try {
+    const url = buildUrl(config.halsethUrl, '/ingest/ledger', since)
+    const raw = await fetchRecords(url, config.halsethSecret)
+    const records: IngestRecord[] = []
+    for (const rec of raw as RawLedgerEntry[]) {
+      if (!rec || typeof rec.content !== 'string' || !rec.content.startsWith(LEDGER_MARK_PREFIX)) {
+        // A ledger line without its mark would launder as un-marked text. Refuse to index it.
+        console.error(`[ingestion] ledger ${rec?.id ?? '(no id)'}: content does not start with the ledger mark -- NOT indexed`)
+        continue
+      }
+      const cursor = (typeof rec.cursor_at === 'string' && rec.cursor_at) ? rec.cursor_at : laterStamp(rec.created_at, rec.state_at)
+      records.push({
+        id: rec.id as unknown as number,
+        source_type: 'ledger',
+        content: rec.content,
+        created_at: rec.created_at,
+        ...(cursor ? { cursor } : {}),
+        companion_id: rec.companion_id,
+      })
+    }
     return { records }
   } catch (e) {
     return { records: [], error: (e as Error).message }
