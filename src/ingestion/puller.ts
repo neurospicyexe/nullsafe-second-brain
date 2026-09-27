@@ -5,7 +5,10 @@ export interface PullerResult {
   error?: string
 }
 
-type PullFn = (config: IngestionConfig, since?: string) => Promise<PullerResult>
+// afterId (2026-09-26, ledger integration): the id of the last row indexed AT the `since` cursor, for a
+// feed that is strictly-after on its cursor and tie-breaks on id (halseth /ingest/ledger). Without it, rows
+// sharing a cursor_at at a page boundary are lost. Pullers whose feed has no tiebreak ignore it.
+type PullFn = (config: IngestionConfig, since?: string, afterId?: string) => Promise<PullerResult>
 
 // isUpdate: if true, pipeline deletes the existing vector entry before re-indexing
 // instead of skipping duplicates. Used for sources where records mutate after creation.
@@ -700,9 +703,13 @@ function laterStamp(a: string | null | undefined, b: string | null | undefined):
 export async function pullLedger(
   config: IngestionConfig,
   since?: string,
+  afterId?: string,
 ): Promise<PullerResult> {
   try {
-    const url = buildUrl(config.halsethUrl, '/ingest/ledger', since)
+    // The feed is STRICTLY after `since` and ordered (cursor_at, id). after_id (the last id indexed at
+    // that cursor, persisted by the pipeline next to the mark) re-includes the rows that tie the cursor
+    // past that id, so a page of 100 ending mid-tie loses nothing. Only sent with a since.
+    const url = buildUrl(config.halsethUrl, '/ingest/ledger', since, 100, since && afterId ? { after_id: afterId } : {})
     const raw = await fetchRecords(url, config.halsethSecret)
     const records: IngestRecord[] = []
     for (const rec of raw as RawLedgerEntry[]) {
@@ -718,6 +725,7 @@ export async function pullLedger(
         content: rec.content,
         created_at: rec.created_at,
         ...(cursor ? { cursor } : {}),
+        cursor_id: rec.id,
         companion_id: rec.companion_id,
       })
     }

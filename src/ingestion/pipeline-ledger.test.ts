@@ -13,7 +13,7 @@ vi.mock('./deepseek-wrapper.js', () => ({
 }))
 
 import { wrapChunk } from './deepseek-wrapper.js'
-import { IngestionPipeline, isMachineGenerated, isVerbatimSource } from './pipeline.js'
+import { IngestionPipeline, isMachineGenerated, isVerbatimSource, afterIdKey, afterIdAfter } from './pipeline.js'
 import { ALL_PULLERS, pullLedger, LEDGER_MARK_PREFIX } from './puller.js'
 import { loadHwm } from './hwm.js'
 import { VectorStore } from '../store/vector-store.js'
@@ -120,5 +120,75 @@ describe('pipeline: ledger records', () => {
     await pipeline.run()
     expect(store.countByPath('rag/ledger/led_1')).toBe(1)
     store.close()
+  })
+})
+
+// ── Tie at a page boundary (2026-09-26 integration pass) ─────────────────────────────────────────
+// halseth's /ingest/ledger is STRICTLY after `since`, ordered (cursor_at, id), and pages with
+// next = { since, after_id }. This fake implements exactly that keyset, so a page of 100 that ends in
+// the middle of a cursor tie is real here (the stub above ignores since/limit and would mask it).
+function keysetLedgerFeed(rows: Array<Record<string, unknown>>) {
+  type R = Record<string, unknown> & { id: string; cursor_at: string }
+  const sorted = ([...rows] as R[]).sort((a, b) => (a.cursor_at < b.cursor_at ? -1 : a.cursor_at > b.cursor_at ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+  const calls: URL[] = []
+  vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+    const url = new URL(String(input))
+    if (url.pathname !== '/ingest/ledger') return new Response('[]', { status: 200 })
+    calls.push(url)
+    const since = url.searchParams.get('since') ?? '1970-01-01T00:00:00.000Z'
+    const after = url.searchParams.get('after_id') ?? ''
+    const limit = Number(url.searchParams.get('limit') ?? '100')
+    const items = sorted
+      .filter(r => r.cursor_at > since || (after !== '' && r.cursor_at === since && r.id > after))
+      .slice(0, limit)
+    const last = items[items.length - 1]
+    const next = items.length < limit || !last ? null : { since: last.cursor_at, after_id: last.id }
+    return new Response(JSON.stringify({ items, next }), { status: 200 })
+  }))
+  return calls
+}
+
+describe('pipeline: ledger paging with a cursor tie at the page boundary', () => {
+  it('indexes every row across ticks: after_id is persisted beside the mark and sent back', async () => {
+    const T = '2026-09-26T11:00:00.000Z'
+    const rows = Array.from({ length: 101 }, (_, i) => {
+      const id = `led_${String(i).padStart(4, '0')}`
+      // rows 97..100 share one cursor; the page of 100 ends at row 99, mid-tie.
+      const cursor_at = i >= 97 ? T : new Date(Date.parse('2026-09-26T10:00:00.000Z') + i * 1000).toISOString()
+      return row({ id, content: LINE.replace('sess-1', `sess-${i}`), created_at: cursor_at, cursor_at })
+    })
+    const calls = keysetLedgerFeed(rows)
+    const store = new VectorStore(':memory:')
+    store.initialize()
+    const pipeline = new IngestionPipeline(config, store, { embed: vi.fn(async () => [0.1, 0.2, 0.3]) } as never)
+
+    await pipeline.run()
+    expect(store.filterByPathPrefix('rag/ledger/', 500)).toHaveLength(100)
+    const hwm1 = loadHwm(config.hwmPath)
+    expect(hwm1.ledger).toBe(T)
+    expect(hwm1[afterIdKey('ledger')]).toBe('led_0099')
+
+    await pipeline.run()
+    expect(calls[1]!.searchParams.get('since')).toBe(T)
+    expect(calls[1]!.searchParams.get('after_id')).toBe('led_0099')
+    const paths = store.filterByPathPrefix('rag/ledger/', 500).map(c => c.vault_path)
+    expect(paths).toHaveLength(101)
+    expect(paths).toContain('rag/ledger/led_0100')
+    expect(loadHwm(config.hwmPath)[afterIdKey('ledger')]).toBe('led_0100')
+
+    // A third tick finds nothing new and moves nothing.
+    await pipeline.run()
+    expect(store.filterByPathPrefix('rag/ledger/', 500)).toHaveLength(101)
+    store.close()
+  })
+
+  it('afterIdAfter: moves with the mark, advances within a tie, ignores records without a tiebreak', () => {
+    const rec = (id: string, cursor: string): IngestRecord => ({ id: id as unknown as number, source_type: 'ledger', content: LINE, created_at: cursor, cursor, cursor_id: id })
+    const T = '2026-09-26T11:00:00.000Z'
+    expect(afterIdAfter(T, 'led_b', rec('led_a', T), true)).toBe('led_a')        // mark moved to it
+    expect(afterIdAfter(T, 'led_a', rec('led_b', T), false)).toBe('led_b')       // tie, later id
+    expect(afterIdAfter(T, 'led_b', rec('led_a', T), false)).toBeNull()          // tie, earlier id
+    expect(afterIdAfter(T, 'led_a', rec('led_z', '2026-09-26T10:00:00.000Z'), false)).toBeNull() // behind the mark
+    expect(afterIdAfter(T, undefined, { id: 1, source_type: 'feeling', content: '{}', created_at: T }, false)).toBeNull()
   })
 })

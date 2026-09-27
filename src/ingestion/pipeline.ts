@@ -88,6 +88,37 @@ export function hwmAfter(current: string | undefined, record: IngestRecord): str
   return next
 }
 
+/** The hwm key holding a source's tiebreak id beside its mark (see IngestRecord.cursor_id). */
+export function afterIdKey(source: string): string {
+  return `${source}.after_id`
+}
+
+function sameInstant(a: string, b: string): boolean {
+  const x = Date.parse(a)
+  const y = Date.parse(b)
+  if (Number.isFinite(x) && Number.isFinite(y)) return x === y
+  return a === b
+}
+
+/**
+ * The after_id to store once `record` is indexed, or null to leave it (2026-09-26, ledger paging). Only
+ * for a record carrying cursor_id. When the mark moves to this record's cursor, after_id becomes this
+ * record's id; when the record TIES the (unmoved) mark -- exactly the case hwmAfter returns null for --
+ * after_id moves forward to it. The feed is ordered (cursor, id), so within a tie ids only ascend.
+ */
+export function afterIdAfter(
+  mark: string | undefined,
+  currentAfterId: string | undefined,
+  record: IngestRecord,
+  markMoved: boolean,
+): string | null {
+  if (record.cursor_id === undefined) return null
+  const c = record.cursor ?? record.created_at
+  if (!mark || !c || !sameInstant(mark, c)) return null
+  if (markMoved || !currentAfterId || record.cursor_id > currentAfterId) return record.cursor_id
+  return null
+}
+
 export class IngestionPipeline {
   constructor(
     private config: IngestionConfig,
@@ -102,7 +133,9 @@ export class IngestionPipeline {
       const since = getHwm(hwm, source)
       console.log(`[ingestion] pulling ${source} since ${since ?? 'beginning'}`)
 
-      const { records, error } = await pull(this.config, since)
+      // after_id rides beside the mark for feeds with an id tiebreak (the ledger); others ignore it.
+      const afterId = since ? getHwm(hwm, afterIdKey(source)) : undefined
+      const { records, error } = afterId ? await pull(this.config, since, afterId) : await pull(this.config, since)
 
       if (error) {
         console.error(`[ingestion] pull failed for ${source}: ${error}`)
@@ -118,9 +151,14 @@ export class IngestionPipeline {
         // Skip machine-generated journal entries -- embedding them pollutes
         // semantic search and creates feedback loops on re-ingest.
         const advance = () => {
-          const to = hwmAfter(getHwm(hwm, source), record)
-          if (to === null) return
-          hwm = setHwm(hwm, source, to)
+          const current = getHwm(hwm, source)
+          const to = hwmAfter(current, record)
+          const nextAfterId = afterIdAfter(to ?? current, getHwm(hwm, afterIdKey(source)), record, to !== null)
+          if (to === null && nextAfterId === null) return
+          if (to !== null) hwm = setHwm(hwm, source, to)
+          if (nextAfterId !== null) hwm = setHwm(hwm, afterIdKey(source), nextAfterId)
+          // A mark moved by a record with no tiebreak must not keep a stale id from another cursor.
+          else if (to !== null && getHwm(hwm, afterIdKey(source))) hwm = setHwm(hwm, afterIdKey(source), '')
           saveHwm(this.config.hwmPath, hwm)
         }
 

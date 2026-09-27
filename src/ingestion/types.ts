@@ -37,6 +37,12 @@ export interface IngestRecord {
    * halseth, or any other source): the mark advances on created_at, as it always has.
    */
   cursor?: string
+  /**
+   * The feed's tiebreak key at `cursor` (2026-09-26, ledger): the pipeline persists it as
+   * `<source>.after_id` beside the mark and hands it back to the puller, so a strictly-after feed never
+   * loses rows that share a cursor at a page boundary. Absent: no tiebreak (every other source).
+   */
+  cursor_id?: string
   companion_id?: string  // cypher | drevan | gaia | null (cross-companion)
   thread_key?: string
 }

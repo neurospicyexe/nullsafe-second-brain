@@ -11,7 +11,7 @@ import path from "node:path";
 import { VectorStore } from "../store/vector-store.js";
 import { ledgerMirrorPath, journalMirrorPath } from "../retract.js";
 import {
-  runLedgerReconcile, runRecallReconcile,
+  runLedgerReconcile, runRecallReconcile, reconcileAfterIdKey, LEDGER_RECONCILE_FEED, RECONCILE_PAGE_LIMIT,
   LEDGER_RECONCILE_HWM_KEY, LEDGER_RECONCILE_FULL_AT_KEY, RECONCILE_HWM_KEY, RECONCILE_FULL_AT_KEY,
 } from "../ingestion/recall-reconcile.js";
 import { loadHwm, saveHwm } from "../ingestion/hwm.js";
@@ -134,5 +134,62 @@ describe("runLedgerReconcile", () => {
     expect(store.existsByPath(journalMirrorPath("j1"))).toBe(false);
     expect(store.existsByPath(ledgerMirrorPath("j1"))).toBe(true);
     expect(loadHwm(config.hwmPath)[LEDGER_RECONCILE_HWM_KEY]).toBeUndefined();
+  });
+});
+
+// ── Tie across runs (2026-09-26 integration pass) ─────────────────────────────────────────────────
+// /ingest/ledger-ineligible is STRICTLY after `since` and tie-breaks on id. Within one run the reconcile
+// already follows next.after_id; ACROSS runs the incremental mark used to be the cursor alone, so a run
+// whose page 2 failed after page 1 ended mid-tie left the rest of that tie unreachable forever.
+describe("runLedgerReconcile: a cursor tie at a page boundary survives a failed run", () => {
+  it("persists after_id beside the mark and sends it back, so every dropped row is purged", async () => {
+    const T = "2026-09-26T11:00:00.000Z";
+    const rows = Array.from({ length: RECONCILE_PAGE_LIMIT + 2 }, (_, i) => ({
+      id: `led_${String(i).padStart(4, "0")}`,
+      // the last four share one cursor; page 1 (500 rows) ends two rows into the tie.
+      cursor_at: i >= RECONCILE_PAGE_LIMIT - 2 ? T : new Date(Date.parse("2026-09-26T08:00:00.000Z") + i * 1000).toISOString(),
+    }));
+    for (const r of rows) put(store, ledgerMirrorPath(r.id), LINE);
+    let failPage2 = true;
+    const calls: URL[] = [];
+    const impl = vi.fn(async (input: string | URL | Request) => {
+      const url = new URL(String(input));
+      calls.push(url);
+      const since = url.searchParams.get("since") ?? "1970-01-01T00:00:00.000Z";
+      const after = url.searchParams.get("after_id") ?? "";
+      const limit = Number(url.searchParams.get("limit"));
+      if (after !== "" && failPage2) { failPage2 = false; return new Response("boom", { status: 503 }); }
+      const items = rows.filter(r => r.cursor_at > since || (after !== "" && r.cursor_at === since && r.id > after)).slice(0, limit);
+      const last = items[items.length - 1];
+      const next = items.length < limit || !last ? null : { since: last.cursor_at, after_id: last.id };
+      return new Response(JSON.stringify({ items, next }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    // Armed incremental, full sweep not due.
+    saveHwm(config.hwmPath, { [LEDGER_RECONCILE_HWM_KEY]: "2026-09-26T07:00:00.000Z", [LEDGER_RECONCILE_FULL_AT_KEY]: new Date().toISOString() });
+
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const r1 = await runLedgerReconcile(config, store, { fetchImpl: impl });
+    expect(r1.mode).toBe("incremental");
+    expect(r1.error).toMatch(/503/);
+    expect(r1.removed_docs).toBe(RECONCILE_PAGE_LIMIT);
+    const hwm = loadHwm(config.hwmPath);
+    expect(hwm[LEDGER_RECONCILE_HWM_KEY]).toBe(T);
+    expect(hwm[reconcileAfterIdKey(LEDGER_RECONCILE_FEED)]).toBe(`led_${String(RECONCILE_PAGE_LIMIT - 1).padStart(4, "0")}`);
+
+    const r2 = await runLedgerReconcile(config, store, { fetchImpl: impl });
+    expect(r2.error).toBeUndefined();
+    const last = calls[calls.length - 1]!;
+    expect(last.searchParams.get("since")).toBe(T);
+    expect(last.searchParams.get("after_id")).toBe(`led_${String(RECONCILE_PAGE_LIMIT - 1).padStart(4, "0")}`);
+    expect(r2.removed_docs).toBe(2);
+    expect(store.filterByPathPrefix("rag/ledger/", 1000)).toHaveLength(0);
+    expect(loadHwm(config.hwmPath)[reconcileAfterIdKey(LEDGER_RECONCILE_FEED)]).toBe(`led_${String(RECONCILE_PAGE_LIMIT + 1).padStart(4, "0")}`);
+  });
+
+  it("the journal feed never grows an after_id key (its feed includes ties when after_id is empty)", async () => {
+    const { impl } = fakeHalseth({ "/ingest/recall-ineligible": { "": { items: [{ id: "cj_1", cursor_at: "2026-09-26T10:00:00.000Z" }], next: null } } });
+    await runRecallReconcile(config, store, { fetchImpl: impl, forceFull: true });
+    expect(Object.keys(loadHwm(config.hwmPath)).some(k => k.endsWith(".after_id"))).toBe(false);
   });
 });

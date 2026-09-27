@@ -56,6 +56,13 @@ export interface ReconcileFeed {
   hwmKey: string
   fullAtKey: string
   mirrorPath: (id: string | number) => string
+  /**
+   * The feed is STRICTLY after `since` and tie-breaks on id (halseth /ingest/ledger-ineligible), so the
+   * incremental mark alone would lose rows sharing its cursor across runs. When true, the id of the last
+   * item at the mark is persisted as `<hwmKey>.after_id` and sent back with the next run's `since`.
+   * (The journal feed includes ties when after_id is empty, so it does not need this.)
+   */
+  persistAfterId?: boolean
 }
 
 export const JOURNAL_RECONCILE_FEED: ReconcileFeed = {
@@ -66,6 +73,12 @@ export const JOURNAL_RECONCILE_FEED: ReconcileFeed = {
 export const LEDGER_RECONCILE_FEED: ReconcileFeed = {
   label: 'ledger-reconcile', endpoint: '/ingest/ledger-ineligible',
   hwmKey: LEDGER_RECONCILE_HWM_KEY, fullAtKey: LEDGER_RECONCILE_FULL_AT_KEY, mirrorPath: ledgerMirrorPath,
+  persistAfterId: true,
+}
+
+/** The hwm key holding a reconcile feed's tiebreak id beside its mark. */
+export function reconcileAfterIdKey(feed: ReconcileFeed): string {
+  return `${feed.hwmKey}.after_id`
 }
 export const RECONCILE_PAGE_LIMIT = 500
 /** Hard stop on paging: 200 pages x 500 = 100k ids, far past the table (6.6k rows on 2026-09-26). */
@@ -115,6 +128,14 @@ async function fetchPage(
   const body = await res.json() as Partial<IneligiblePage>
   if (!body || !Array.isArray(body.items)) throw new Error(`Halseth ${feed.endpoint}: malformed response (no items[])`)
   return { items: body.items, next: body.next ?? null, mode: body.mode }
+}
+
+/** Compare two cursor stamps: <0, 0, >0 (parsed when both parse, else as strings). */
+function cmpStamp(a: string, b: string): number {
+  const x = Date.parse(a)
+  const y = Date.parse(b)
+  if (Number.isFinite(x) && Number.isFinite(y)) return x - y
+  return a < b ? -1 : a > b ? 1 : 0
 }
 
 /** A later ISO stamp, or the current one; never moves backward. */
@@ -170,7 +191,10 @@ export async function runFeedReconcile(
 
   const result: ReconcileResult = { mode: full ? 'full' : 'incremental', pages: 0, listed: 0, removed_docs: 0, removed_rows: 0 }
   let maxCursor = mark
-  let params: Record<string, string> = full ? {} : { since: mark! }
+  // The tiebreak id AT maxCursor (persistAfterId feeds only): the largest id seen with that cursor.
+  const afterKey = reconcileAfterIdKey(feed)
+  let maxId: string | undefined = feed.persistAfterId && mark ? (getHwm(hwm, afterKey) || undefined) : undefined
+  let params: Record<string, string> = full ? {} : { since: mark!, ...(maxId ? { after_id: maxId } : {}) }
 
   try {
     for (;;) {
@@ -182,13 +206,21 @@ export async function runFeedReconcile(
         result.listed++
         const n = retractPath(store, feed.mirrorPath(item.id))
         if (n > 0) { result.removed_docs++; result.removed_rows += n }
-        maxCursor = laterOf(maxCursor, item.cursor_at ?? item.state_at)
+        const c = item.cursor_at ?? item.state_at
+        if (feed.persistAfterId && c) {
+          const id = String(item.id)
+          const d = maxCursor ? cmpStamp(c, maxCursor) : 1
+          if (d > 0) maxId = id
+          else if (d === 0 && (!maxId || id > maxId)) maxId = id
+        }
+        maxCursor = laterOf(maxCursor, c)
       }
       // An INCREMENTAL mark advances per page: those pages are ordered by cursor, so everything up to
       // the last cursor on this page is reconciled even if a later page fails. A FULL sweep pages by
       // id, not cursor, so it moves the mark only once it has completed (below).
-      if (!full && maxCursor && maxCursor !== getHwm(hwm, feed.hwmKey)) {
+      if (!full && maxCursor && (maxCursor !== getHwm(hwm, feed.hwmKey) || (feed.persistAfterId && (maxId ?? '') !== (getHwm(hwm, afterKey) ?? '')))) {
         hwm = setHwm(hwm, feed.hwmKey, maxCursor)
+        if (feed.persistAfterId) hwm = setHwm(hwm, afterKey, maxId ?? '')
         saveHwm(config.hwmPath, hwm)
       }
       if (!page.next) break
@@ -202,6 +234,8 @@ export async function runFeedReconcile(
       // Stamp the START: anything that changed while the sweep ran is within the next sweep's reach.
       // A full sweep that completes with an empty list still arms the incremental path from now.
       hwm = setHwm(hwm, feed.hwmKey, maxCursor ?? startedAt)
+      // No cursor seen: the mark is the sweep's start, which no row ties by id.
+      if (feed.persistAfterId) hwm = setHwm(hwm, afterKey, maxCursor ? (maxId ?? '') : '')
       hwm = setHwm(hwm, feed.fullAtKey, startedAt)
       saveHwm(config.hwmPath, hwm)
     }
