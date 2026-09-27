@@ -162,6 +162,13 @@ export class IngestionPipeline {
           saveHwm(this.config.hwmPath, hwm)
         }
 
+        // A row its puller refused (ledger: lost its mark). Never indexed; the mark moves past it so the
+        // feed cannot stall on it. The puller already logged it, once.
+        if (record.skip) {
+          advance()
+          continue
+        }
+
         if (isMachineGenerated(record)) {
           console.log(`[ingestion] skip machine-generated ${chunkId}`)
           advance()

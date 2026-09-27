@@ -12,7 +12,8 @@
 // with source `session <id>` and dedup_key `gap:<companion>:<session_id>`. A query can name a gap; a
 // model can fill one. Halseth stamps the mark; the dedup key makes the 20-minute re-run idempotent
 // (recent-relational's has_notes counts companion_journal, which this no longer writes, so the same
-// gap is re-read every tick until it ages out of the 4h window -- each re-post is a 200 duplicate).
+// gap is re-read every tick until it ages out of the window -- each re-post is a 200 duplicate). A session is
+// only read once it has been quiet for 2h (GAP_SETTLE_MS), so a late note never leaves a permanent false gap.
 //
 // Never writes to /companion-journal. A 404 from /ledger (this SB deployed ahead of Halseth) is logged
 // once and the run stops; a 422 (grammar refusal) is logged loudly with the rule and never retried.
@@ -40,6 +41,21 @@ const COMPANIONS = ['drevan', 'cypher', 'gaia'] as const
 type CompanionId = typeof COMPANIONS[number]
 
 type FetchFn = typeof fetch
+
+/**
+ * A session is only read for a gap once it has been quiet this long (2026-09-26 review S4). The companion's
+ * note can land a while after the session closes; a gap recorded before it lands is a permanent false gap
+ * (the dedup key never lets the line be withdrawn). Measured on updated_at, the session's last touch/close.
+ */
+export const GAP_SETTLE_MS = 2 * 60 * 60 * 1000
+/** Window asked of /sessions/recent-relational: wide enough that settled sessions are still in it. */
+export const GAP_WINDOW_HOURS = 6
+
+/** True when the session's last touch (updated_at, else created_at) is at least GAP_SETTLE_MS old. */
+export function sessionSettled(session: Pick<RelationalSession, 'created_at' | 'updated_at'>, now: number): boolean {
+  const last = parseUtc(session.updated_at || session.created_at || '')
+  return Number.isFinite(last) && now - last >= GAP_SETTLE_MS
+}
 
 /**
  * The session's calendar date, straight from the stamp's YYYY-MM-DD prefix. Halseth stores UTC either
@@ -85,12 +101,13 @@ async function processCompanion(
   config: IngestionConfig,
   companion: CompanionId,
   fetchImpl: FetchFn,
+  now: number,
 ): Promise<CompanionOutcome> {
   let sessions: RelationalSession[]
 
   try {
     const response = await fetchImpl(
-      `${config.halsethUrl}/sessions/recent-relational?companion_id=${companion}&hours=4`,
+      `${config.halsethUrl}/sessions/recent-relational?companion_id=${companion}&hours=${GAP_WINDOW_HOURS}`,
       {
         headers: { Authorization: `Bearer ${config.halsethSecret}` },
       },
@@ -107,7 +124,7 @@ async function processCompanion(
     return 'ok'
   }
 
-  const gapSessions = sessions.filter((s) => s.has_notes === 0)
+  const gapSessions = sessions.filter((s) => s.has_notes === 0 && sessionSettled(s, now))
   if (gapSessions.length === 0) return 'ok'
 
   let written = 0
@@ -154,12 +171,12 @@ async function processCompanion(
   return 'ok'
 }
 
-export async function runGapDetector(config: IngestionConfig, fetchImpl: FetchFn = fetch): Promise<void> {
+export async function runGapDetector(config: IngestionConfig, fetchImpl: FetchFn = fetch, now: number = Date.now()): Promise<void> {
   console.log('[gap-reader] starting relational session gap check')
 
   for (const companion of COMPANIONS) {
     try {
-      const outcome = await processCompanion(config, companion, fetchImpl)
+      const outcome = await processCompanion(config, companion, fetchImpl, now)
       if (outcome === 'ledger_unavailable') break
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)

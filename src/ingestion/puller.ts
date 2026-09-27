@@ -713,12 +713,27 @@ export async function pullLedger(
     const raw = await fetchRecords(url, config.halsethSecret)
     const records: IngestRecord[] = []
     for (const rec of raw as RawLedgerEntry[]) {
+      const cursor = rec && ((typeof rec.cursor_at === 'string' && rec.cursor_at) ? rec.cursor_at : laterStamp(rec.created_at, rec.state_at))
       if (!rec || typeof rec.content !== 'string' || !rec.content.startsWith(LEDGER_MARK_PREFIX)) {
-        // A ledger line without its mark would launder as un-marked text. Refuse to index it.
-        console.error(`[ingestion] ledger ${rec?.id ?? '(no id)'}: content does not start with the ledger mark -- NOT indexed`)
+        // A ledger line without its mark would launder as un-marked text. Refuse to index it -- but hand it
+        // to the pipeline as a SKIP record so the mark (and after_id) still move past it (2026-09-26 review
+        // S2): dropping it here left the mark behind it, so it was re-fetched and re-logged every cycle, and
+        // a page of 100 refused rows stalled the feed forever. Logged here, once per row: once the mark
+        // moves, the row is never fetched again.
+        console.error(`[ingestion] ledger ${rec?.id ?? '(no id)'}: content does not start with the ledger mark -- NOT indexed (mark advances past it)`)
+        if (rec && typeof rec.id === 'string' && rec.id && cursor) {
+          records.push({
+            id: rec.id as unknown as number,
+            source_type: 'ledger',
+            content: '',
+            created_at: rec.created_at,
+            cursor,
+            cursor_id: rec.id,
+            skip: 'unmarked',
+          })
+        }
         continue
       }
-      const cursor = (typeof rec.cursor_at === 'string' && rec.cursor_at) ? rec.cursor_at : laterStamp(rec.created_at, rec.state_at)
       records.push({
         id: rec.id as unknown as number,
         source_type: 'ledger',

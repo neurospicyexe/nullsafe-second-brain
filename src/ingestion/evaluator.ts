@@ -84,15 +84,34 @@ export function buildDriftLedgerBody(args: {
   baselineMean: number;
   sampleCount: number;
   worstBasin: string;
+  /** false = omit the basin-name clause (the one-shot retry after a lexicon/address/health refusal). */
+  includeBasin?: boolean;
 }): string {
   const name = args.companionId.charAt(0).toUpperCase() + args.companionId.slice(1);
-  const basin = args.worstBasin.replace(/["“”〔〕]/g, "").trim();
+  const basin = args.includeBasin === false ? "" : args.worstBasin.replace(/["“”〔〕]/g, "").trim();
   const basinClause = basin ? ` Worst drifted basin: "${basin}".` : "";
   return (
     `Recorded: sustained pressure drift for ${name} across two consecutive evaluator runs. ` +
     `avg_distance=${args.avgScore.toFixed(3)} vs baseline_mean=${args.baselineMean.toFixed(3)} (n=${args.sampleCount}).` +
     basinClause
   );
+}
+
+// The 422 rules the basin-name clause can cause: the name is operator/companion-authored free text, so it
+// can carry a lexicon word (hard-blocked even inside quotes), a pet name, or a number the basin row cannot
+// vouch for. On exactly these the evaluator retries ONCE without the clause: the scores alone are a whole,
+// sourced line. Any other rule is the scores' own problem and is not retried.
+export const DRIFT_RETRY_RULES: ReadonlySet<string> = new Set(["lexicon", "address", "health", "health_numbers"]);
+
+/**
+ * One drift-reader line per companion per UTC day per worst basin (2026-09-26 review S3). The evaluator
+ * runs every tick and writes a basin_history row each time, so keying on the row id wrote a fresh line for
+ * every sustained tick. The basin is slugged (it is free text) and the key is capped at the door's 200.
+ */
+export function driftDedupKey(companionId: string, worstBasin: string, now: Date = new Date()): string {
+  const day = now.toISOString().slice(0, 10);
+  const slug = worstBasin.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "none";
+  return `drift:${companionId}:${day}:${slug}`.slice(0, 200);
 }
 
 function cosineSimilarity(a: number[], b: number[]): number {
@@ -290,17 +309,25 @@ export async function runDriftEvaluation(
         if (!historyResult.id) {
           console.error(`[evaluator] ${companionId}: basin-history write returned no id -- no source, no ledger write`);
         } else {
-          const result = await postLedger(config, {
+          const entry = (includeBasin: boolean) => ({
             companion_id: companionId,
-            function: "drift-reader",
+            function: "drift-reader" as const,
             body: buildDriftLedgerBody({
-              companionId, avgScore, baselineMean: baseline.mean, sampleCount: baseline.sampleCount, worstBasin,
+              companionId, avgScore, baselineMean: baseline.mean, sampleCount: baseline.sampleCount, worstBasin, includeBasin,
             }),
-            source_kind: "row",
+            source_kind: "row" as const,
             source_ref: `companion_basin_history:${historyResult.id}`,
-            dedup_key: `drift:${companionId}:${historyResult.id}`,
+            dedup_key: driftDedupKey(companionId, worstBasin),
           });
-          if (result.kind === "rejected") {
+          let result = await postLedger(config, entry(true));
+          if (result.kind === "rejected" && DRIFT_RETRY_RULES.has(result.rule)) {
+            console.error(`[evaluator] LEDGER REJECTED ${companionId} drift flag (with basin name): rule=${result.rule} error=${result.error} -- retrying once without the basin clause`);
+            result = await postLedger(config, entry(false));
+            if (result.kind !== "rejected") console.log(`[evaluator] ${companionId}: drift flag retry without the basin clause: ${result.kind}`);
+          }
+          if (result.kind === "duplicate") {
+            console.log(`[evaluator] ${companionId}: drift flag already on the ledger today for this basin (${result.id})`);
+          } else if (result.kind === "rejected") {
             console.error(`[evaluator] LEDGER REJECTED ${companionId} drift flag: rule=${result.rule} error=${result.error}`);
           } else if (result.kind === "unavailable") {
             console.error(`[evaluator] ${companionId}: POST /ledger returned 404 -- Halseth has no ledger lane yet; drift flag skipped (no journal fallback)`);

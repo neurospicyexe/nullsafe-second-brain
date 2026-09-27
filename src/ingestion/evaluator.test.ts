@@ -85,7 +85,7 @@ describe("classifyDrift (calibrated)", () => {
 // The sustained-pressure flag used to be a second-person companion_journal row ("your own norm").
 // It is now a drift-reader ledger line, third person, sourced to the basin_history row just written.
 import { vi, afterEach } from "vitest";
-import { runDriftEvaluation, buildDriftLedgerBody } from "./evaluator.js";
+import { runDriftEvaluation, buildDriftLedgerBody, driftDedupKey, DRIFT_RETRY_RULES } from "./evaluator.js";
 import type { IngestionConfig } from "./types.js";
 import type { OpenAIEmbedder } from "../embeddings/openai-embedder.js";
 
@@ -114,7 +114,8 @@ describe("runDriftEvaluation -> ledger", () => {
   const embedder = { embed: vi.fn(async () => [0, 1]) } as unknown as OpenAIEmbedder;
   afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
-  function stubHalseth(ledgerStatus = 201) {
+  function stubHalseth(ledgerStatus = 201, ledgerRoute?: (body: any, n: number) => Response) {
+    let ledgerN = 0;
     const calls: Array<{ url: URL; init?: RequestInit }> = [];
     vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const url = new URL(String(input));
@@ -130,7 +131,10 @@ describe("runDriftEvaluation -> ledger", () => {
         const body = JSON.parse(String(init!.body));
         return j({ id: `bh-${body.companion_id}`, message: "ok" }, 201);
       }
-      if (url.pathname === "/ledger") return j({ id: "led_1", content: "x" }, ledgerStatus);
+      if (url.pathname === "/ledger") {
+        if (ledgerRoute) return ledgerRoute(JSON.parse(String(init!.body)), ++ledgerN);
+        return j({ id: "led_1", content: "x" }, ledgerStatus);
+      }
       return j({ error: "unexpected" }, 500);
     }));
     return calls;
@@ -166,5 +170,72 @@ describe("runDriftEvaluation -> ledger", () => {
     }
     expect(err.mock.calls.flat().join(" ")).toMatch(/404/);
     expect(err.mock.calls.flat().join(" ")).toMatch(/LEDGER REJECTED/);
+  });
+});
+
+describe("drift-reader: one line per companion per day per basin (S3), one retry without the basin name (S1)", () => {
+  const CONFIG = { halsethUrl: "https://h.example", halsethSecret: "sek" } as IngestionConfig;
+  const embedder = { embed: vi.fn(async () => [0, 1]) } as unknown as OpenAIEmbedder;
+  afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+
+  it("driftDedupKey: drift:<companion>:<YYYY-MM-DD>:<basin slug>, capped at 200", () => {
+    const d = new Date("2026-09-26T23:30:00.000Z");
+    expect(driftDedupKey("drevan", "The House I Hold", d)).toBe("drift:drevan:2026-09-26:the-house-i-hold");
+    expect(driftDedupKey("gaia", "", d)).toBe("drift:gaia:2026-09-26:none");
+    expect(driftDedupKey("cypher", "x".repeat(400), d).length).toBe(200);
+  });
+
+  function stub(route: (body: any, n: number) => Response) {
+    const ledger: any[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(String(input));
+      const j = (b: unknown, s = 200) => new Response(JSON.stringify(b), { status: s });
+      if (url.pathname === "/persona-blocks") return j({ blocks: [{ content: "voice" }] });
+      if (url.pathname.startsWith("/companion-growth/basins/")) return j({ basins: [{ id: "b1", basin_name: "vevi house", embedding: "[1,0]" }] });
+      if (url.pathname.startsWith("/companion-growth/basin-history/") && init?.method !== "POST") {
+        return j({ history: Array.from({ length: 6 }, () => ({ drift_score: 0.6, drift_type: "pressure", notes: "blocks_analyzed=1" })) });
+      }
+      if (url.pathname === "/companion-growth/basin-history") return j({ id: `bh-${JSON.parse(String(init!.body)).companion_id}` }, 201);
+      if (url.pathname === "/ledger") { const b = JSON.parse(String(init!.body)); ledger.push(b); return route(b, ledger.length); }
+      return j({ error: "unexpected" }, 500);
+    }));
+    return ledger;
+  }
+
+  it("the dedup key is per day + basin, not per basin_history row", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const ledger = stub(() => new Response(JSON.stringify({ id: "led_1", content: "x" }), { status: 201 }));
+    await runDriftEvaluation(CONFIG, embedder);
+    const day = new Date().toISOString().slice(0, 10);
+    expect(ledger.find((l) => l.companion_id === "drevan").dedup_key).toBe(`drift:drevan:${day}:vevi-house`);
+    expect(ledger.every((l) => !/bh-/.test(l.dedup_key))).toBe(true);
+  });
+
+  it.each([...DRIFT_RETRY_RULES])("a 422 %s retries ONCE without the basin clause and logs both", async (rule) => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const ledger = stub((b) => b.body.includes("Worst drifted basin")
+      ? new Response(JSON.stringify({ error: "no", rule }), { status: 422 })
+      : new Response(JSON.stringify({ id: "led_2", content: "x" }), { status: 201 }));
+    await runDriftEvaluation(CONFIG, embedder);
+    const drevan = ledger.filter((l) => l.companion_id === "drevan");
+    expect(drevan).toHaveLength(2);
+    expect(drevan[0].body).toContain('Worst drifted basin: "vevi house"');
+    expect(drevan[1].body).not.toContain("basin:");
+    expect(drevan[1].dedup_key).toBe(drevan[0].dedup_key);
+    expect(err.mock.calls.flat().join(" ")).toMatch(new RegExp(`rule=${rule}.*retrying once without the basin clause`));
+    expect(log.mock.calls.flat().join(" ")).toMatch(/retry without the basin clause: written/);
+  });
+
+  it("any other 422 rule is not retried; a retry that is refused again is not retried twice", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const other = stub(() => new Response(JSON.stringify({ error: "no", rule: "verb" }), { status: 422 }));
+    await runDriftEvaluation(CONFIG, embedder);
+    expect(other.filter((l) => l.companion_id === "drevan")).toHaveLength(1);
+    vi.unstubAllGlobals();
+    const twice = stub(() => new Response(JSON.stringify({ error: "no", rule: "lexicon" }), { status: 422 }));
+    await runDriftEvaluation(CONFIG, embedder);
+    expect(twice.filter((l) => l.companion_id === "drevan")).toHaveLength(2);
   });
 });

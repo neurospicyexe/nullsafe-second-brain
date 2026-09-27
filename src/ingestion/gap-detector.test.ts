@@ -9,7 +9,7 @@ vi.mock('./deepseek-client.js', () => ({
 }))
 
 import { chatComplete, callDeepSeek } from './deepseek-client.js'
-import { runGapDetector, buildGapBody, sessionDate, sessionDuration, gapDedupKey, type RelationalSession } from './gap-detector.js'
+import { runGapDetector, buildGapBody, sessionDate, sessionDuration, gapDedupKey, sessionSettled, GAP_SETTLE_MS, GAP_WINDOW_HOURS, type RelationalSession } from './gap-detector.js'
 import type { IngestionConfig } from './types.js'
 
 const CONFIG = {
@@ -136,5 +136,31 @@ describe('runGapDetector', () => {
     expect(calls.filter(c => c.url.pathname === '/ledger')).toHaveLength(1)
     expect(calls.some(c => c.url.pathname.includes('companion-journal'))).toBe(false)
     expect(calls.some(c => c.url.searchParams.get('companion_id') === 'cypher')).toBe(false)
+  })
+})
+
+describe('the gap-reader waits for a session to settle (review S4)', () => {
+  const NOW = Date.parse('2026-09-26T05:00:00.000Z')
+
+  it('sessionSettled: only once updated_at (else created_at) is 2h old; unparseable never', () => {
+    expect(GAP_SETTLE_MS).toBe(2 * 60 * 60 * 1000)
+    expect(sessionSettled(session({ updated_at: '2026-09-26T03:00:00.000Z' }), NOW)).toBe(true)
+    expect(sessionSettled(session({ updated_at: '2026-09-26T03:00:01.000Z' }), NOW)).toBe(false)
+    expect(sessionSettled(session({ updated_at: '2026-09-26 02:59:00' }), NOW)).toBe(true)   // SQLite stamp, UTC
+    expect(sessionSettled(session({ updated_at: '', created_at: '2026-09-26T04:30:00.000Z' }), NOW)).toBe(false)
+    expect(sessionSettled(session({ updated_at: 'garbage', created_at: 'garbage' }), NOW)).toBe(false)
+  })
+
+  it('a session touched under 2h ago is not read for a gap; a settled one is; the window is wide enough to hold it', async () => {
+    const { impl, calls } = fakeHalseth(
+      { drevan: [session({ id: 'fresh', updated_at: '2026-09-26T04:10:00.000Z' }), session({ id: 'settled', updated_at: '2026-09-26T02:40:00.000Z' })] },
+      () => new Response(JSON.stringify({ id: 'led_1', content: 'x' }), { status: 201 }),
+    )
+    await runGapDetector(CONFIG, impl, NOW)
+    const posts = calls.filter(c => c.url.pathname === '/ledger').map(c => JSON.parse(String(c.init!.body)).source_ref)
+    expect(posts).toEqual(['settled'])
+    const q = calls.find(c => c.url.pathname === '/sessions/recent-relational')!
+    expect(Number(q.url.searchParams.get('hours'))).toBe(GAP_WINDOW_HOURS)
+    expect(GAP_WINDOW_HOURS * 3600_000).toBeGreaterThan(GAP_SETTLE_MS)
   })
 })

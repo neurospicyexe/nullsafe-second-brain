@@ -45,6 +45,12 @@ export interface IngestRecord {
   cursor_id?: string
   companion_id?: string  // cypher | drevan | gaia | null (cross-companion)
   thread_key?: string
+  /**
+   * Set by a puller for a row it REFUSES to index (2026-09-26, ledger review S2): the pipeline advances the
+   * mark (and after_id) past it and indexes nothing. Without this, a refused row was simply dropped, the
+   * mark never moved past it, and a page made only of refused rows stalled its feed forever.
+   */
+  skip?: 'unmarked'
 }
 
 export interface HwmMap {

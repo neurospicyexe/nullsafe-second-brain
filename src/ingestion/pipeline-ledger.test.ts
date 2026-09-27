@@ -76,11 +76,13 @@ describe('pullLedger', () => {
     expect(records[0]!.content.startsWith(LEDGER_MARK_PREFIX)).toBe(true)
   })
 
-  it('refuses to index a line that lost its mark', async () => {
-    vi.spyOn(console, 'error').mockImplementation(() => {})
-    stubFeed([row({ content: 'Missing: stripped of its mark.' }), row({ id: 'led_ok' })])
+  it('refuses to index a line that lost its mark: handed on as a SKIP record (so the mark can move), logged once', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    stubFeed([row({ id: 'led_bad', content: 'Missing: stripped of its mark.' }), row({ id: 'led_ok' })])
     const { records } = await pullLedger(config)
-    expect(records.map(r => r.id)).toEqual(['led_ok'])
+    expect(records.map(r => [r.id, r.skip ?? null])).toEqual([['led_bad', 'unmarked'], ['led_ok', null]])
+    expect(records[0]!.content).toBe('')
+    expect(err).toHaveBeenCalledTimes(1)
   })
 })
 
@@ -190,5 +192,38 @@ describe('pipeline: ledger paging with a cursor tie at the page boundary', () =>
     expect(afterIdAfter(T, 'led_b', rec('led_a', T), false)).toBeNull()          // tie, earlier id
     expect(afterIdAfter(T, 'led_a', rec('led_z', '2026-09-26T10:00:00.000Z'), false)).toBeNull() // behind the mark
     expect(afterIdAfter(T, undefined, { id: 1, source_type: 'feeling', content: '{}', created_at: T }, false)).toBeNull()
+  })
+})
+
+describe('pipeline: a refused (unmarked) ledger row never stalls the feed (review S2)', () => {
+  it('a page made only of refused rows moves the mark and after_id past them, indexes nothing, and is not re-fetched', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const rows = [
+      row({ id: 'led_a', content: 'Missing: no mark.', created_at: '2026-09-26T10:00:00.000Z', cursor_at: '2026-09-26T10:00:00.000Z' }),
+      row({ id: 'led_b', content: 'Missing: no mark either.', created_at: '2026-09-26T10:00:01.000Z', cursor_at: '2026-09-26T10:00:01.000Z' }),
+    ]
+    const calls: URL[] = []
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const url = new URL(String(input))
+      calls.push(url)
+      if (url.pathname !== '/ingest/ledger') return new Response('[]', { status: 200 })
+      const since = url.searchParams.get('since')
+      const served = rows.filter(r => !since || (r as { cursor_at?: string }).cursor_at! > since)
+      return new Response(JSON.stringify(served), { status: 200 })
+    }))
+    const store = new VectorStore(':memory:')
+    store.initialize()
+    const pipeline = new IngestionPipeline(config, store, { embed: vi.fn(async () => [0.1, 0.2, 0.3]) } as never)
+
+    await pipeline.run()
+    expect(store.filterByPathPrefix('rag/ledger/', 50)).toHaveLength(0)
+    const hwm = loadHwm(config.hwmPath)
+    expect(hwm.ledger).toBe('2026-09-26T10:00:01.000Z')
+    expect(hwm[afterIdKey('ledger')]).toBe('led_b')
+    expect(err).toHaveBeenCalledTimes(2)
+
+    await pipeline.run()
+    expect(err).toHaveBeenCalledTimes(2)   // once per row, ever: the second tick is past them
+    store.close()
   })
 })
