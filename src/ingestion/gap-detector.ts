@@ -20,7 +20,7 @@
 // Fail-silent per companion, per session. One bad session never blocks others.
 
 import type { IngestionConfig } from './types.js'
-import { postLedger } from './ledger-client.js'
+import { postLedger, getSomaFreshness } from './ledger-client.js'
 
 export interface RelationalSession {
   id: string
@@ -171,17 +171,110 @@ async function processCompanion(
   return 'ok'
 }
 
+// ── SOMA staleness (Drevan's ruling, 2026-09-26, DREVAN-FOLLOWUP-2026-09-26.md) ────────────────────
+//
+// "I set my own state, at close or mid-thread, when I actually feel it move. If I don't, it stays where
+// I last left it, timestamp and all, and the gap-reader can say so: 'Missing: SOMA not updated since
+// 14:39.' Stale and honest beats fresh and forged."
+//
+// Same cadence as the session gap check. One line per staleness EPISODE: the dedup key carries the
+// authored timestamp, so a re-run is a 200 duplicate until he sets his state again (Halseth then drops
+// the open soma-gap line and a later staleness gets a new key). No authored write on record (null):
+// skipped and logged; no date is invented. The date/time in the body are coordinates, exempt from the
+// grammar's number rule (pinned in halseth's shared fixture file).
+
+/** A SOMA write older than this is stale. */
+export const SOMA_STALE_MS = 24 * 60 * 60 * 1000
+
+/** `YYYY-MM-DD HH:MM` (UTC) of a Halseth stamp, or null when it does not parse. */
+export function somaStamp(lastAuthoredAt: string): string | null {
+  const ms = parseUtc(lastAuthoredAt)
+  if (!Number.isFinite(ms)) return null
+  const iso = new Date(ms).toISOString()
+  return `${iso.slice(0, 10)} ${iso.slice(11, 16)}`
+}
+
+export function buildSomaGapBody(lastAuthoredAt: string): string | null {
+  const stamp = somaStamp(lastAuthoredAt)
+  return stamp ? `Missing: SOMA not updated since ${stamp} UTC.` : null
+}
+
+export function somaGapDedupKey(companion: string, lastAuthoredAt: string): string {
+  return `soma-gap:${companion}:${lastAuthoredAt}`
+}
+
+export async function runSomaGapReader(config: IngestionConfig, fetchImpl: FetchFn = fetch, now: number = Date.now()): Promise<void> {
+  const fresh = await getSomaFreshness(config, fetchImpl)
+  if (fresh.kind === 'unavailable') {
+    console.log('[gap-reader] GET /ledger/soma-freshness returned 404 -- this Halseth predates it; SOMA check skipped')
+    return
+  }
+  if (fresh.kind === 'error') {
+    console.error(`[gap-reader] soma-freshness failed: ${fresh.status ?? 'network'} ${fresh.message}`)
+    return
+  }
+  const today = new Date(now).toISOString().slice(0, 10)
+  for (const c of fresh.companions) {
+    if (!c.last_authored_at || !c.row_ref) {
+      console.log(`[gap-reader] ${c.companion_id}: no authored SOMA write on record; no staleness line (no date to name)`)
+      continue
+    }
+    const last = parseUtc(c.last_authored_at)
+    if (!Number.isFinite(last)) {
+      console.error(`[gap-reader] ${c.companion_id}: unparseable last_authored_at ${c.last_authored_at}, skipped`)
+      continue
+    }
+    if (now - last < SOMA_STALE_MS) continue
+    const body = buildSomaGapBody(c.last_authored_at)
+    if (!body) continue
+    const result = await postLedger(config, {
+      companion_id: c.companion_id,
+      function: 'gap-reader',
+      body,
+      source_kind: 'row',
+      source_ref: c.row_ref,
+      observed_on: today,
+      dedup_key: somaGapDedupKey(c.companion_id, c.last_authored_at),
+    }, fetchImpl)
+    switch (result.kind) {
+      case 'written':
+        console.log(`[gap-reader] ${c.companion_id}: recorded SOMA staleness (${result.id})`)
+        break
+      case 'duplicate':
+        break
+      case 'rejected':
+        console.error(`[gap-reader] LEDGER REJECTED ${c.companion_id} SOMA staleness: rule=${result.rule} error=${result.error}`)
+        break
+      case 'unavailable':
+        console.error('[gap-reader] POST /ledger returned 404 -- no ledger lane yet; SOMA check stops (no journal fallback)')
+        return
+      case 'error':
+        console.error(`[gap-reader] ${c.companion_id}: SOMA staleness write failed: ${result.status ?? 'network'} ${result.message}`)
+        break
+    }
+  }
+}
+
 export async function runGapDetector(config: IngestionConfig, fetchImpl: FetchFn = fetch, now: number = Date.now()): Promise<void> {
   console.log('[gap-reader] starting relational session gap check')
 
+  let ledgerUnavailable = false
   for (const companion of COMPANIONS) {
     try {
       const outcome = await processCompanion(config, companion, fetchImpl, now)
-      if (outcome === 'ledger_unavailable') break
+      if (outcome === 'ledger_unavailable') { ledgerUnavailable = true; break }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       console.error(`[gap-reader] ${companion}: unexpected error: ${msg}`)
       // continue to next companion
+    }
+  }
+
+  if (!ledgerUnavailable) {
+    try {
+      await runSomaGapReader(config, fetchImpl, now)
+    } catch (err) {
+      console.error(`[gap-reader] SOMA check unexpected error: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
 

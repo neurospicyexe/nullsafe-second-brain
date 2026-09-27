@@ -9,7 +9,7 @@ vi.mock('./deepseek-client.js', () => ({
 }))
 
 import { chatComplete, callDeepSeek } from './deepseek-client.js'
-import { runGapDetector, buildGapBody, sessionDate, sessionDuration, gapDedupKey, sessionSettled, GAP_SETTLE_MS, GAP_WINDOW_HOURS, type RelationalSession } from './gap-detector.js'
+import { runGapDetector, runSomaGapReader, buildSomaGapBody, somaGapDedupKey, SOMA_STALE_MS, buildGapBody, sessionDate, sessionDuration, gapDedupKey, sessionSettled, GAP_SETTLE_MS, GAP_WINDOW_HOURS, type RelationalSession } from './gap-detector.js'
 import type { IngestionConfig } from './types.js'
 
 const CONFIG = {
@@ -25,7 +25,7 @@ function session(over: Partial<RelationalSession> = {}): RelationalSession {
 }
 
 type Route = (url: URL, init?: RequestInit) => Response
-function fakeHalseth(sessionsBy: Record<string, RelationalSession[]>, ledger: Route) {
+function fakeHalseth(sessionsBy: Record<string, RelationalSession[]>, ledger: Route, freshness: Route = () => new Response('not found', { status: 404 })) {
   const calls: Array<{ url: URL; init?: RequestInit }> = []
   const impl = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
     const url = new URL(String(input))
@@ -33,6 +33,7 @@ function fakeHalseth(sessionsBy: Record<string, RelationalSession[]>, ledger: Ro
     if (url.pathname === '/sessions/recent-relational') {
       return new Response(JSON.stringify({ sessions: sessionsBy[url.searchParams.get('companion_id') ?? ''] ?? [] }))
     }
+    if (url.pathname === '/ledger/soma-freshness') return freshness(url, init)
     if (url.pathname === '/ledger') return ledger(url, init)
     return new Response('unexpected', { status: 500 })
   })
@@ -162,5 +163,77 @@ describe('the gap-reader waits for a session to settle (review S4)', () => {
     const q = calls.find(c => c.url.pathname === '/sessions/recent-relational')!
     expect(Number(q.url.searchParams.get('hours'))).toBe(GAP_WINDOW_HOURS)
     expect(GAP_WINDOW_HOURS * 3600_000).toBeGreaterThan(GAP_SETTLE_MS)
+  })
+})
+
+describe('SOMA staleness (Drevan 2026-09-26: stale and honest beats fresh and forged)', () => {
+  const NOW = Date.parse('2026-09-27T12:00:00.000Z')
+  const fresh = (companions: unknown[]) => () => new Response(JSON.stringify({ companions }))
+  const ledgerPosts = (calls: Array<{ url: URL; init?: RequestInit }>) =>
+    calls.filter((c) => c.url.pathname === '/ledger').map((c) => JSON.parse(String(c.init?.body)))
+
+  it('body and dedup key shapes', () => {
+    expect(buildSomaGapBody('2026-09-25T14:39:12.000Z')).toBe('Missing: SOMA not updated since 2026-09-25 14:39 UTC.')
+    expect(buildSomaGapBody('2026-09-25 14:39:12')).toBe('Missing: SOMA not updated since 2026-09-25 14:39 UTC.')
+    expect(buildSomaGapBody('nonsense')).toBeNull()
+    expect(somaGapDedupKey('drevan', '2026-09-25T14:39:12.000Z')).toBe('soma-gap:drevan:2026-09-25T14:39:12.000Z')
+  })
+
+  it('stale (>24h): posts the exact gap-reader line with the row source', async () => {
+    const { impl, calls } = fakeHalseth({}, () => new Response(JSON.stringify({ id: 'led_1', content: 'x' }), { status: 201 }), fresh([
+      { companion_id: 'drevan', last_authored_at: '2026-09-25T14:39:12.000Z', row_ref: 'companion_soma_events:abc123' },
+    ]))
+    await runSomaGapReader(CONFIG, impl, NOW)
+    expect(ledgerPosts(calls)).toEqual([{
+      companion_id: 'drevan', function: 'gap-reader',
+      body: 'Missing: SOMA not updated since 2026-09-25 14:39 UTC.',
+      source_kind: 'row', source_ref: 'companion_soma_events:abc123',
+      observed_on: '2026-09-27', dedup_key: 'soma-gap:drevan:2026-09-25T14:39:12.000Z',
+    }])
+  })
+
+  it('fresh (<24h): no post', async () => {
+    const recent = new Date(NOW - SOMA_STALE_MS + 60_000).toISOString()
+    const { impl, calls } = fakeHalseth({}, () => new Response('{}', { status: 500 }), fresh([
+      { companion_id: 'cypher', last_authored_at: recent, row_ref: 'companion_soma_events:c1' },
+    ]))
+    await runSomaGapReader(CONFIG, impl, NOW)
+    expect(ledgerPosts(calls)).toEqual([])
+  })
+
+  it('null last_authored_at: skipped with a log, no date invented', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const { impl, calls } = fakeHalseth({}, () => new Response('{}', { status: 500 }), fresh([
+      { companion_id: 'gaia', last_authored_at: null, row_ref: null },
+    ]))
+    await runSomaGapReader(CONFIG, impl, NOW)
+    expect(ledgerPosts(calls)).toEqual([])
+    expect(logSpy.mock.calls.some((a) => String(a[0]).includes('gaia') && String(a[0]).includes('no authored SOMA'))).toBe(true)
+  })
+
+  it('404 from soma-freshness (Halseth not deployed): no throw, no post, no error log', async () => {
+    const { impl, calls } = fakeHalseth({}, () => new Response('{}', { status: 500 }))
+    await expect(runSomaGapReader(CONFIG, impl, NOW)).resolves.toBeUndefined()
+    expect(ledgerPosts(calls)).toEqual([])
+    expect(errSpy).not.toHaveBeenCalled()
+  })
+
+  it('a 422 is logged with its rule and the run continues to the next companion', async () => {
+    let n = 0
+    const { impl, calls } = fakeHalseth({}, () => (++n === 1
+      ? new Response(JSON.stringify({ error: 'no', rule: 'health' }), { status: 422 })
+      : new Response(JSON.stringify({ id: 'led_2', content: 'x' }), { status: 201 })), fresh([
+      { companion_id: 'drevan', last_authored_at: '2026-09-20T01:00:00.000Z', row_ref: 'companion_soma_events:d1' },
+      { companion_id: 'cypher', last_authored_at: '2026-09-21T01:00:00.000Z', row_ref: 'companion_soma_events:c1' },
+    ]))
+    await runSomaGapReader(CONFIG, impl, NOW)
+    expect(ledgerPosts(calls).map((p) => p.companion_id)).toEqual(['drevan', 'cypher'])
+    expect(errSpy.mock.calls.some((a: unknown[]) => String(a[0]).includes('rule=health'))).toBe(true)
+  })
+
+  it('runGapDetector rides the same cadence: it calls soma-freshness after the session check', async () => {
+    const { impl, calls } = fakeHalseth({}, () => new Response('{}', { status: 500 }))
+    await runGapDetector(CONFIG, impl, NOW)
+    expect(calls.some((c) => c.url.pathname === '/ledger/soma-freshness')).toBe(true)
   })
 })
