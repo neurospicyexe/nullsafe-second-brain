@@ -309,6 +309,8 @@ export async function runDriftEvaluation(
         if (!historyResult.id) {
           console.error(`[evaluator] ${companionId}: basin-history write returned no id -- no source, no ledger write`);
         } else {
+          // One key for both attempts: computed once, so a retry cannot straddle UTC midnight onto a new key.
+          const dedupKey = driftDedupKey(companionId, worstBasin);
           const entry = (includeBasin: boolean) => ({
             companion_id: companionId,
             function: "drift-reader" as const,
@@ -317,7 +319,7 @@ export async function runDriftEvaluation(
             }),
             source_kind: "row" as const,
             source_ref: `companion_basin_history:${historyResult.id}`,
-            dedup_key: driftDedupKey(companionId, worstBasin),
+            dedup_key: dedupKey,
           });
           let result = await postLedger(config, entry(true));
           if (result.kind === "rejected" && DRIFT_RETRY_RULES.has(result.rule)) {
