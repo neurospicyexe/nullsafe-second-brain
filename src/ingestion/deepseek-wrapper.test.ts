@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { buildWrapPrompt, parseWrappedOutput, wrapChunk } from './deepseek-wrapper.js'
+import { HOUSEHOLD_GROUNDING_RULE, resetHouseholdFactsCache } from './household-grounding.js'
 import type { IngestRecord } from './types.js'
 
 const baseRecord: IngestRecord = {
@@ -13,6 +14,8 @@ const baseRecord: IngestRecord = {
 
 afterEach(() => {
   vi.restoreAllMocks()
+  vi.unstubAllGlobals()
+  resetHouseholdFactsCache()
 })
 
 describe('buildWrapPrompt', () => {
@@ -85,5 +88,85 @@ describe('wrapChunk', () => {
     }))
 
     await expect(wrapChunk(baseRecord, config)).rejects.toThrow('DeepSeek returned empty preamble')
+  })
+})
+
+// 2026-10-07: the preamble called Lucy (a Dalmatian) a "sick cat". The wrap now carries the
+// canonical animals record from Halseth architect_facts + a no-inference rule.
+describe('wrapChunk household grounding', () => {
+  const config = {
+    deepseekApiKey: 'test-key', deepseekModel: 'deepseek-chat',
+    halsethUrl: 'https://halseth.example', halsethSecret: 'secret',
+  }
+  const facts = {
+    count: 4,
+    facts: [
+      { fact: 'Lucy is a Dalmatian (a dog).', category: 'animals', status: 'active' },
+      { fact: 'Is the new cat staying?', category: 'animals', status: 'open' },
+      { fact: 'Raziel works nights.', category: 'work', status: 'active' },
+      { fact: 'Old retired animal fact.', category: 'animals', status: 'retired' },
+    ],
+  }
+  const chatOk = { ok: true, json: async () => ({ choices: [{ message: { content: 'Preamble.' } }] }) }
+
+  function routedFetch(factsRes: unknown) {
+    return vi.fn(async (url: string, _init?: RequestInit) =>
+      String(url).includes('/identity/architect-facts') ? factsRes : chatOk)
+  }
+  function systemOf(mock: ReturnType<typeof vi.fn>): string {
+    const chat = mock.mock.calls.find(c => String(c[0]).includes('/chat/completions'))!
+    return JSON.parse((chat[1] as RequestInit).body as string).messages[0].content
+  }
+
+  it('puts the active animals facts and the rule in the system message', async () => {
+    const mock = routedFetch({ ok: true, json: async () => facts })
+    vi.stubGlobal('fetch', mock)
+
+    await wrapChunk(baseRecord, config)
+
+    const factsCall = mock.mock.calls.find(c => String(c[0]).includes('/identity/architect-facts'))!
+    expect(String(factsCall[0])).toBe('https://halseth.example/identity/architect-facts')
+    expect((factsCall[1] as RequestInit).headers).toMatchObject({ Authorization: 'Bearer secret' })
+    const system = systemOf(mock)
+    expect(system).toContain(HOUSEHOLD_GROUNDING_RULE)
+    expect(system).toContain('Lucy is a Dalmatian (a dog).')
+    expect(system).not.toContain('Is the new cat staying?')   // open = a question, not a fact
+    expect(system).not.toContain('Raziel works nights.')      // not the animals category
+    expect(system).not.toContain('Old retired animal fact.')
+  })
+
+  it('fetches the facts once across many wraps (cached)', async () => {
+    const mock = routedFetch({ ok: true, json: async () => facts })
+    vi.stubGlobal('fetch', mock)
+
+    await wrapChunk(baseRecord, config)
+    await wrapChunk(baseRecord, config)
+
+    expect(mock.mock.calls.filter(c => String(c[0]).includes('/identity/architect-facts'))).toHaveLength(1)
+  })
+
+  it('fails open: a facts outage still wraps, with the rule and no record', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const mock = routedFetch({ ok: false, status: 503, json: async () => ({}) })
+    vi.stubGlobal('fetch', mock)
+
+    const result = await wrapChunk(baseRecord, config)
+
+    expect(result).toBe(`Preamble.
+
+${baseRecord.content}`)
+    const system = systemOf(mock)
+    expect(system).toContain(HOUSEHOLD_GROUNDING_RULE)
+    expect(system).not.toContain('HOUSEHOLD ANIMALS (canonical record)')
+  })
+
+  it('carries the rule even with no Halseth configured', async () => {
+    const mock = vi.fn().mockResolvedValue(chatOk)
+    vi.stubGlobal('fetch', mock)
+
+    await wrapChunk(baseRecord, { deepseekApiKey: 'test-key', deepseekModel: 'deepseek-chat' })
+
+    expect(mock).toHaveBeenCalledOnce()
+    expect(systemOf(mock)).toContain(HOUSEHOLD_GROUNDING_RULE)
   })
 })

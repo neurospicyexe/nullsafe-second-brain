@@ -1,6 +1,7 @@
 import type { IngestRecord } from './types.js'
 import { chatComplete } from './deepseek-client.js'
 import { withOwnerPronounRule } from '../pronoun-rule.js'
+import { fetchHouseholdFacts, householdGroundingBlock } from './household-grounding.js'
 
 export function buildWrapPrompt(record: IngestRecord): string {
   return `You are annotating a chunk of relational data for semantic search.
@@ -25,16 +26,19 @@ export function parseWrappedOutput(raw: string, originalContent: string): string
 
 export async function wrapChunk(
   record: IngestRecord,
-  config: { deepseekApiKey: string; deepseekModel: string }
+  config: { deepseekApiKey: string; deepseekModel: string; halsethUrl?: string; halsethSecret?: string }
 ): Promise<string> {
   const prompt = buildWrapPrompt(record)
+  // Grounding (2026-10-07): the preamble once called Lucy (a Dalmatian) a "sick cat" -- the source
+  // never named a species. Carry the canonical animals record + a no-inference rule (household-grounding.ts).
+  const household = householdGroundingBlock(await fetchHouseholdFacts(config))
 
   // DeepInfra first, direct DeepSeek only as the emergency lane (deepseek-client.ts).
   const result = await chatComplete({
     // The wrap preamble names "who wrote this" and can reference Raziel directly -- carry the
     // owner pronoun rule as its own system message (2026-09-24).
     messages: [
-      { role: 'system', content: withOwnerPronounRule('') },
+      { role: 'system', content: withOwnerPronounRule(household) },
       { role: 'user', content: prompt },
     ],
     maxTokens: 200,

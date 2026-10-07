@@ -11,6 +11,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { OWNER_PRONOUN_RULE, withOwnerPronounRule } from './pronoun-rule.js'
 import { callDeepSeek } from './ingestion/deepseek-client.js'
 import { wrapChunk } from './ingestion/deepseek-wrapper.js'
+import { HOUSEHOLD_GROUNDING_RULE } from './ingestion/household-grounding.js'
 import type { IngestRecord } from './ingestion/types.js'
 
 afterEach(() => {
@@ -77,6 +78,9 @@ describe('ingestion callers send the pronoun rule as a system message', () => {
     const [, init] = mockFetch.mock.calls[0] as [string, RequestInit]
     const body = JSON.parse(String(init.body))
     const systemMsg = body.messages.find((m: { role: string }) => m.role === 'system')
-    expect(systemMsg?.content).toBe(OWNER_PRONOUN_RULE)
+    // 2026-10-07: the wrap system message also carries the household grounding rule.
+    expect(systemMsg?.content).toContain(OWNER_PRONOUN_RULE)
+    expect(systemMsg?.content).toContain(HOUSEHOLD_GROUNDING_RULE)
+    expect(systemMsg?.content.split(OWNER_PRONOUN_RULE)).toHaveLength(2)  // exactly once
   })
 })

@@ -44,7 +44,7 @@ export function buildUrl(base: string, path: string, since?: string, limit = 100
   return url.toString()
 }
 
-function authHeaders(secret: string): HeadersInit {
+export function authHeaders(secret: string): HeadersInit {
   return { Authorization: `Bearer ${secret}`, 'Content-Type': 'application/json' }
 }
 
