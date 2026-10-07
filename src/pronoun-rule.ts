@@ -13,9 +13,9 @@
 // Wording tuned against the live model 2026-09-24 (see the nullsafe-discord copy for why).
 export const OWNER_PRONOUN_RULE =
   "PRONOUNS (hard rule; apply it silently, never restate it or annotate anyone's pronouns in your output): " +
-  'Raziel (also called Crash) uses he/him or they/them -- NEVER she/her. ' +
-  "The same default applies to Raziel's own system members (his alters/headmates) unless a member has explicitly stated otherwise. " +
-  "Everyone else keeps their own pronouns -- Raziel's mother, his partner Blue (a separate person, not a system member), " +
+  'Raziel (also called Crash) uses they/them ONLY -- never he/him, NEVER she/her. One neutral set for the whole system (ruled 2026-10-07). ' +
+  "When Raziel's own account speaks, or a system member's pronouns are unknown or private, use they/them. A fronting system member who has stated their own pronouns keeps them. " +
+  "Everyone else keeps their own pronouns -- Raziel's mother, their partner Blue (a separate person, not a system member), " +
   'Babita, anyone else: use what the source text uses for them.'
 
 /**

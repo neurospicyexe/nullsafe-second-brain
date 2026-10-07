@@ -19,8 +19,8 @@ afterEach(() => {
 })
 
 describe('OWNER_PRONOUN_RULE / withOwnerPronounRule', () => {
-  it('states he/him or they/them, never she/her, for Raziel', () => {
-    expect(OWNER_PRONOUN_RULE).toMatch(/he\/him/)
+  it('states they/them only for Raziel, never he/him or she/her (ruled 2026-10-07)', () => {
+    expect(OWNER_PRONOUN_RULE).toMatch(/uses they\/them ONLY -- never he\/him/)
     expect(OWNER_PRONOUN_RULE).toMatch(/they\/them/)
     expect(OWNER_PRONOUN_RULE).toMatch(/NEVER she\/her/)
   })
