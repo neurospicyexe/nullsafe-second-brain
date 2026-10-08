@@ -73,3 +73,45 @@ describe("ObsidianRestAdapter.list", () => {
     expect(result).toEqual(["a.md", "b.md"]);
   });
 });
+
+describe("ObsidianRestAdapter retry exhaustion (2026-10-08)", () => {
+  it("parks an exhausted write in dead_writes instead of deleting it", async () => {
+    const qPath = join(queueDir, "exhaust.db");
+    const a = new ObsidianRestAdapter({
+      url: "https://obsidian.example.com", apiKey: "k", queuePath: qPath, maxAttempts: 1,
+    });
+    try {
+      mockFetch.mockRejectedValue(new Error("getaddrinfo ENOTFOUND"));
+      await a.write({ path: "notes/kept.md", content: "must survive" });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const q = (a as any).queue;
+      q.prepare("UPDATE pending_writes SET next_retry_at = 0").run();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (a as any).processQueue();
+      expect(q.prepare("SELECT COUNT(*) n FROM pending_writes").get().n).toBe(0);
+      const dead = q.prepare("SELECT path, content, attempts FROM dead_writes").all();
+      expect(dead).toEqual([{ path: "notes/kept.md", content: "must survive", attempts: 1 }]);
+    } finally {
+      a.close();
+    }
+  });
+
+  it("keeps retrying below maxAttempts", async () => {
+    const a = new ObsidianRestAdapter({
+      url: "https://obsidian.example.com", apiKey: "k", queuePath: join(queueDir, "below.db"), maxAttempts: 5,
+    });
+    try {
+      mockFetch.mockRejectedValue(new Error("down"));
+      await a.write({ path: "notes/x.md", content: "c" });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const q = (a as any).queue;
+      q.prepare("UPDATE pending_writes SET next_retry_at = 0").run();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (a as any).processQueue();
+      expect(q.prepare("SELECT attempts FROM pending_writes").get().attempts).toBe(1);
+      expect(q.prepare("SELECT COUNT(*) n FROM dead_writes").get().n).toBe(0);
+    } finally {
+      a.close();
+    }
+  });
+});

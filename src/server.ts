@@ -38,6 +38,7 @@ export function createServer(config: SecondBrainConfig) {
     adapter = new ObsidianRestAdapter({
       url: config.obsidian_rest.url,
       apiKey: config.obsidian_rest.api_key,
+      maxAttempts: config.obsidian_rest.max_attempts,
     });
   } else if (config.couchdb) {
     adapter = new CouchDBAdapter(config.couchdb);

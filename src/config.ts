@@ -21,7 +21,7 @@ const configSchema = z.object({
     adapter: z.enum(["filesystem", "obsidian-rest"]).default("filesystem"),
     path: z.string().default(""),
   }).prefault({}),
-  obsidian_rest: z.object({ url: z.string(), api_key: z.string() }).optional(),
+  obsidian_rest: z.object({ url: z.string(), api_key: z.string(), max_attempts: z.number().int().positive().optional() }).optional(),
   halseth: z.object({ url: z.string(), secret: z.string() }),
   plural: z.object({ enabled: z.boolean(), mcp_url: z.string().optional() }),
   companions: z.array(companionSchema),

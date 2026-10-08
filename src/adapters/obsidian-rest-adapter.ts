@@ -9,7 +9,7 @@ export interface ObsidianRestConfig {
   apiKey: string;
   queuePath?: string;   // SQLite file for offline write queue (default: ~/.nullsafe-second-brain/vault-queue.db)
   retryIntervalMs?: number; // base retry interval (default 30s)
-  maxAttempts?: number; // give up after this many tries (default 50)
+  maxAttempts?: number; // park in dead_writes after this many tries (default 50)
 }
 
 interface QueueRow {
@@ -51,6 +51,19 @@ export class ObsidianRestAdapter implements VaultAdapter {
         next_retry_at INTEGER NOT NULL DEFAULT 0,
         last_error TEXT,
         enqueued_at INTEGER NOT NULL DEFAULT (unixepoch())
+      );
+      -- 2026-10-08: a write that exhausts its retries is PARKED here, never deleted. The 10-07
+      -- tunnel teardown (K16) left 66 writes counting down to a silent drop; vault content
+      -- must not vanish because a route was down for two days. Re-queue with
+      -- INSERT INTO pending_writes (path, content) SELECT path, content FROM dead_writes.
+      CREATE TABLE IF NOT EXISTS dead_writes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        path TEXT NOT NULL,
+        content TEXT NOT NULL,
+        attempts INTEGER NOT NULL,
+        last_error TEXT,
+        enqueued_at INTEGER NOT NULL,
+        died_at INTEGER NOT NULL DEFAULT (unixepoch())
       );
     `);
 
@@ -205,8 +218,13 @@ export class ObsidianRestAdapter implements VaultAdapter {
         const attempts = row.attempts + 1;
         const message = describeError(err);
         if (attempts >= this.maxAttempts) {
-          console.error(`[obsidian-rest] giving up on ${row.path} after ${attempts} attempts: ${message}`);
-          this.queue.prepare("DELETE FROM pending_writes WHERE id = ?").run(row.id);
+          console.error(`[obsidian-rest] parking ${row.path} in dead_writes after ${attempts} attempts: ${message}`);
+          this.queue.transaction(() => {
+            this.queue.prepare(
+              "INSERT INTO dead_writes (path, content, attempts, last_error, enqueued_at) VALUES (?, ?, ?, ?, ?)",
+            ).run(row.path, row.content, attempts, message, (row as QueueRow & { enqueued_at?: number }).enqueued_at ?? Math.floor(Date.now() / 1000));
+            this.queue.prepare("DELETE FROM pending_writes WHERE id = ?").run(row.id);
+          })();
           continue;
         }
         // Exponential backoff: base * 2^(attempts-1), capped at 1h
