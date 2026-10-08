@@ -15,7 +15,10 @@ are, which is the usual source of confusion. One supervisor per service.
 ## Deploy an update
 
 ```bash
-ssh vps-root 'cd /home/nullsafe/nullsafe-second-brain && sudo -u nullsafe git pull && sudo -u nullsafe npm ci && sudo -u nullsafe npm run build && systemctl restart second-brain.service'
+# build as nullsafe (npm lives under nullsafe's nvm and is NOT on root's PATH; non-login shells need nvm sourced)
+ssh vps 'export NVM_DIR=$HOME/.nvm && source $NVM_DIR/nvm.sh && cd ~/nullsafe-second-brain && git pull && npm ci && npm run build'
+# restart as root
+ssh vps-root 'systemctl restart second-brain.service'
 ```
 
 Then confirm it came back:
