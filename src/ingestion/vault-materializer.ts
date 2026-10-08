@@ -145,8 +145,9 @@ function formatWikilink(vaultPath: string, id: string): string {
 export async function runVaultMaterializer(
   ingestionConfig: IngestionConfig,
   vault: VaultAdapter,
-): Promise<{ written: number; failed: number; skipped: number; perCompanion: Record<string, number> }> {
+): Promise<{ written: number; queued: number; failed: number; skipped: number; perCompanion: Record<string, number> }> {
   let totalWritten = 0;
+  let totalQueued = 0;
   let totalFailed = 0;
   let totalSkipped = 0;
   const perCompanion: Record<string, number> = {};
@@ -190,7 +191,7 @@ export async function runVaultMaterializer(
   if (allItems.length === 0) {
     for (const c of COMPANIONS) perCompanion[c] = 0;
     console.log(`[vault-materializer] complete: nothing to materialize`);
-    return { written: 0, failed: 0, skipped: 0, perCompanion };
+    return { written: 0, queued: 0, failed: 0, skipped: 0, perCompanion };
   }
 
   const sameTickPaths = new Map<string, string>();
@@ -230,7 +231,16 @@ export async function runVaultMaterializer(
   for (const item of allItems) {
     try {
       const content = renderRow(item.companionId, item.kind, item.row, resolver);
-      await vault.write({ path: item.targetPath, content, overwrite: true });
+      const writeResult = await vault.write({ path: item.targetPath, content, overwrite: true });
+      if (!writeResult.delivered) {
+        // The adapter queued the write instead of landing it (Obsidian / tunnel down). Do NOT PATCH
+        // vault_path: if the queue later gives up, Halseth would hold this row as materialized forever
+        // with no file behind it. Left unmaterialized, the next tick re-offers the row, the re-write
+        // upserts the same queue entry, and once the vault is reachable the write lands and the
+        // following tick PATCHes. Self-healing, at the cost of counting it here as queued, not written.
+        totalQueued++;
+        continue;
+      }
       const patchOk = await patchVaultPath(ingestionConfig, item.kind, item.row.id, item.targetPath);
       if (patchOk) {
         totalWritten++;
@@ -244,8 +254,8 @@ export async function runVaultMaterializer(
     }
   }
 
-  console.log(`[vault-materializer] complete: written=${totalWritten} failed=${totalFailed} skipped=${totalSkipped}`);
-  return { written: totalWritten, failed: totalFailed, skipped: totalSkipped, perCompanion };
+  console.log(`[vault-materializer] done: ${totalWritten} written, ${totalQueued} queued, ${totalFailed} failed, ${totalSkipped} skipped`);
+  return { written: totalWritten, queued: totalQueued, failed: totalFailed, skipped: totalSkipped, perCompanion };
 }
 
 async function fetchVaultPaths(config: IngestionConfig, ids: string[]): Promise<Record<string, string | null>> {

@@ -1,0 +1,20 @@
+[Unit]
+Description=Nullsafe Second Brain MCP Server (HTTP)
+After=network.target
+
+[Service]
+Type=simple
+User=nullsafe
+WorkingDirectory=/home/nullsafe/nullsafe-second-brain
+# ALL secrets come from .env via EnvironmentFile. Never add an Environment=KEY=value line
+# for a secret here: a baked value is set before node starts, and neither node's --env-file
+# nor dotenv overrides a variable that is already present, so after a rotation the stale
+# baked value silently wins over .env (this took Second Brain offline 06-28 to 07-01).
+# See docs/deployment.md.
+EnvironmentFile=/home/nullsafe/nullsafe-second-brain/.env
+ExecStart=/home/nullsafe/.nvm/versions/node/v24.14.0/bin/node dist/index-http.js
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

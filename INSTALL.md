@@ -88,8 +88,10 @@ SSH into your VPS and run:
 ```bash
 curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
 sudo apt-get install -y nodejs git
-npm install -g pm2
 ```
+
+The service is supervised by **systemd** (ships with every mainstream Linux). Do not install pm2 for
+it; two supervisors fighting over one port is a failure mode we have already paid for.
 
 ### 1. Get the code on your VPS
 
@@ -103,21 +105,37 @@ npm install
 
 Same as the local setup above — vault path will be a folder on the VPS (e.g. `/home/you/vault`).
 
-### 3. Build and start
+### 3. Build and install the systemd unit
 
 ```bash
 npm run build
-pm2 start dist/index-http.js --name second-brain
-pm2 save
-pm2 startup   # follow the printed instruction to make it survive reboots
+sudo cp deploy/second-brain.service /etc/systemd/system/second-brain.service
+# Edit User=, WorkingDirectory=, EnvironmentFile= and the node path in ExecStart= to match your host.
+sudo systemctl daemon-reload
+sudo systemctl enable --now second-brain.service
+systemctl status second-brain.service --no-pager
+curl -s localhost:3001/health
+```
+
+Secrets (`HALSETH_SECRET`, API keys) go in `.env` next to the checkout, mode `600`, and reach the
+process through the unit's `EnvironmentFile=` line. Never put a secret in an `Environment=` line of
+the unit: a baked value is set before node starts and silently beats `.env` after a rotation. The
+full rule and the incident behind it are in `docs/deployment.md`.
+
+Updating later:
+
+```bash
+cd ~/nullsafe-second-brain && git pull && npm ci && npm run build
+sudo systemctl restart second-brain.service
+journalctl -u second-brain.service -n 50 --no-pager
 ```
 
 ### 4. Make it accessible to Claude
 
-The server runs on port 3456 by default. To connect Claude to it, you'll need either:
+The server runs on port 3001 by default (`http.port` in `second-brain.config.json`). To connect Claude to it, you'll need either:
 
 - **Cloudflare Tunnel** (recommended, free) — creates a secure URL like `https://second-brain.yourdomain.com` without opening firewall ports. See [Cloudflare Tunnel docs](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/).
-- **Direct port** — open port 3456 on your VPS firewall and use your VPS IP address directly (less secure).
+- **Direct port** — open port 3001 on your VPS firewall and use your VPS IP address directly (less secure).
 
 ### 5. Connect Claude
 

@@ -16,8 +16,9 @@ docs/private/
 # Personal operational docs -- contain VPS IPs, SSH config, credentials
 docs/how-to.md
 docs/how-to*.md
-docs/deployment.md
 docs/deploy*.md
+# deployment.md is the systemd runbook CLAUDE.md points at: aliases + unit only, no IPs, no credentials.
+!docs/deployment.md
 *-checklist.md
 *_CHECKLIST.md
 OPS-*.md

@@ -30,7 +30,7 @@ function setup(opts: { embedderFails: boolean }) {
   store.initialize();
   const written = new Map<string, string>();
   const adapter = {
-    write: vi.fn(async (a: { path: string; content: string }) => { written.set(a.path, a.content); }),
+    write: vi.fn(async (a: { path: string; content: string }) => { written.set(a.path, a.content); return { delivered: true as const }; }),
     read: vi.fn(async (p: string) => written.get(p) ?? "# recovered\n\nbody text"),
     list: vi.fn(async () => []),
     move: vi.fn(async () => {}),

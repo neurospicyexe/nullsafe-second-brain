@@ -1,6 +1,6 @@
 # nullsafe-second-brain
 
-Node.js MCP server (TypeScript, stdio + HTTP transports). Layer 2 in the Nullsafe ecosystem: reads from Halseth and nullsafe-plural-v2 via HTTP, synthesizes content into an Obsidian vault, and maintains a SQLite vector store for companion RAG retrieval.
+Node.js MCP server (TypeScript, stdio + HTTP transports). Layer 2 in the Nullsafe ecosystem: reads from Halseth via HTTP (nullsafe-plural-v2 was retired 2026-09-30; front state is unknown until the new plural app has an API), synthesizes content into an Obsidian vault, and maintains a SQLite vector store for companion RAG retrieval.
 
 Part of the BBH suite — see root `CLAUDE.md` for cross-project context.
 

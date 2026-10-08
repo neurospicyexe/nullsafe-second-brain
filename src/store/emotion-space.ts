@@ -54,5 +54,3 @@ export function emotionResonance(
   // real boost, opposite emotions decay to ~0. Monotonic, so it preserves nearer-ranks-higher order.
   return weight * linear * linear;
 }
-
-export const __test = { EMOTION_COORDS, MAX_DIST, lookup };

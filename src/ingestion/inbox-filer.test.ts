@@ -11,7 +11,7 @@ class FakeVault implements VaultAdapter {
   files = new Map<string, string>();
   moves: Array<[string, string]> = [];
   constructor(seed: Record<string, string> = {}) { for (const [k, v] of Object.entries(seed)) this.files.set(k, v); }
-  async write(o: { path: string; content: string; overwrite?: boolean }) { this.files.set(o.path, o.content); }
+  async write(o: { path: string; content: string; overwrite?: boolean }) { this.files.set(o.path, o.content); return { delivered: true as const }; }
   async read(path: string) { const c = this.files.get(path); if (c === undefined) throw new Error(`not found: ${path}`); return c; }
   async list(dir = "") {
     const prefix = dir.replace(/\/+$/, "");

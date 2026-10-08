@@ -5,7 +5,7 @@ import type { Embedder } from "../src/embeddings/embedder.js";
 import { VectorStore } from "../src/store/vector-store.js";
 
 const mockAdapter: VaultAdapter = {
-  write: vi.fn().mockResolvedValue(undefined),
+  write: vi.fn().mockResolvedValue({ delivered: true }),
   read: vi.fn().mockResolvedValue("# Note\n\nReindexed content."),
   exists: vi.fn().mockResolvedValue(true),
   list: vi.fn().mockResolvedValue([]),

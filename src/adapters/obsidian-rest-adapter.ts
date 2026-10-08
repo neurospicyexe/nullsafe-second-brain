@@ -1,7 +1,7 @@
 import Database from "better-sqlite3";
 import { mkdirSync } from "fs";
 import { dirname } from "path";
-import type { VaultAdapter, VaultWriteOptions } from "./vault-adapter.js";
+import type { VaultAdapter, VaultWriteOptions, VaultWriteResult } from "./vault-adapter.js";
 import { assertVaultRelativePath } from "./safe-vault-path.js";
 
 export interface ObsidianRestConfig {
@@ -70,16 +70,24 @@ export class ObsidianRestAdapter implements VaultAdapter {
     this.startRetryLoop();
   }
 
-  async write({ path, content, overwrite = true }: VaultWriteOptions): Promise<void> {
+  /**
+   * A failed PUT is queued for retry and reported as `{ delivered: false, queued: true }`, never thrown.
+   * Returning normally used to make callers count an undelivered write as written (vault-materializer
+   * then PATCHed vault_path on Halseth for a file that did not exist). The result makes the two cases
+   * distinguishable; only the path-traversal guard still throws.
+   */
+  async write({ path, content, overwrite = true }: VaultWriteOptions): Promise<VaultWriteResult> {
     assertVaultRelativePath(path);
-    if (!overwrite && (await this.exists(path))) return;
+    if (!overwrite && (await this.exists(path))) return { delivered: true };
     try {
       await this.putFile(path, content);
       this.queue.prepare("DELETE FROM pending_writes WHERE path = ?").run(path);
+      return { delivered: true };
     } catch (err) {
       const detail = describeError(err);
       this.enqueue(path, content, detail);
       console.error(`[obsidian-rest] write failed, queued: ${path} | ${detail}`);
+      return { delivered: false, queued: true };
     }
   }
 

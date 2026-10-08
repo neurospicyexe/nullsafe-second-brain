@@ -7,7 +7,7 @@ import type { VaultAdapter } from "../../src/adapters/vault-adapter.js";
 import type { Embedder } from "../../src/embeddings/embedder.js";
 
 const mockAdapter: VaultAdapter = {
-  write: vi.fn().mockResolvedValue(undefined),
+  write: vi.fn().mockResolvedValue({ delivered: true }),
   read: vi.fn().mockResolvedValue("content"),
   exists: vi.fn().mockResolvedValue(false),
   list: vi.fn().mockResolvedValue([]),

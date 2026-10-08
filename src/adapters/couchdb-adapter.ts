@@ -1,5 +1,5 @@
 import { fallbackMixedHashEach } from "octagonal-wheels/hash/purejs";
-import type { VaultAdapter, VaultWriteOptions } from "./vault-adapter.js";
+import type { VaultAdapter, VaultWriteOptions, VaultWriteResult } from "./vault-adapter.js";
 import { assertVaultRelativePath } from "./safe-vault-path.js";
 
 export interface CouchDBConfig {
@@ -52,9 +52,9 @@ export class CouchDBAdapter implements VaultAdapter {
     if (!res.ok) throw new Error(`CouchDB PUT ${id} failed: ${res.status}`);
   }
 
-  async write({ path, content, overwrite = true }: VaultWriteOptions): Promise<void> {
+  async write({ path, content, overwrite = true }: VaultWriteOptions): Promise<VaultWriteResult> {
     assertVaultRelativePath(path);
-    if (!overwrite && await this.exists(path)) return;
+    if (!overwrite && await this.exists(path)) return { delivered: true };
 
     const now = Date.now();
     const buf = Buffer.from(content, "utf-8");
@@ -92,6 +92,7 @@ export class CouchDBAdapter implements VaultAdapter {
     if (existing?._rev) metaDoc._rev = existing._rev;
 
     await this.putDoc(path, metaDoc);
+    return { delivered: true };
   }
 
   async read(path: string): Promise<string> {

@@ -166,7 +166,7 @@ npm run build  # compile to dist/
 |---------|-------------|
 | [Halseth](https://github.com/neurospicyexe/halseth) | The data backend this reads from |
 | [Hearth](https://github.com/neurospicyexe/hearth) | Visual dashboard (reads `_recent-patterns.md` this generates) |
-| [nullsafe-plural-v2](https://github.com/neurospicyexe/nullsafe-plural-v2) | SimplyPlural fronting integration |
+| ~~nullsafe-plural-v2~~ | Retired 2026-09-30 (SimplyPlural integration). Front state is unknown until the replacement plural app ships an API |
 
 ---
 

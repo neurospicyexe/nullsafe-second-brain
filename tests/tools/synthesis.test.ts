@@ -6,7 +6,7 @@ import type { VaultAdapter } from "../../src/adapters/vault-adapter.js";
 import type { Embedder } from "../../src/embeddings/embedder.js";
 import type { HalsethClient } from "../../src/clients/halseth-client.js";
 
-const mockAdapter: VaultAdapter = { write: vi.fn().mockResolvedValue(undefined), read: vi.fn(), exists: vi.fn(), list: vi.fn() };
+const mockAdapter: VaultAdapter = { write: vi.fn().mockResolvedValue({ delivered: true }), read: vi.fn(), exists: vi.fn(), list: vi.fn() };
 const mockEmbedder: Embedder = { embed: vi.fn().mockResolvedValue([0.1]), embedBatch: vi.fn().mockResolvedValue([[0.1]]) };
 const mockHalseth = {
   getSession: vi.fn().mockResolvedValue({ id: "s1", notes: "good session", front_state: "raziel", emotional_frequency: "warm", active_anchor: "home", facet: null }),

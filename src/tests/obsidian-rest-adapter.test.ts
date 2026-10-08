@@ -63,6 +63,41 @@ describe("ObsidianRestAdapter path traversal", () => {
   });
 });
 
+describe("ObsidianRestAdapter.write result", () => {
+  it("returns { delivered: true } and leaves the queue empty when the PUT succeeds", async () => {
+    mockFetch.mockResolvedValueOnce({ ok: true, status: 204, statusText: "No Content" });
+    const result = await adapter.write({ path: "notes/ok.md", content: "hello" });
+    expect(result).toEqual({ delivered: true });
+    expect(adapter.pendingCount()).toBe(0);
+  });
+
+  it("returns { delivered: false, queued: true } and queues the write when the PUT fails", async () => {
+    // Before this result existed, write() returned void here and the materializer counted the row as
+    // written and PATCHed vault_path on Halseth for a file that never landed.
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 502, statusText: "Bad Gateway" });
+    const result = await adapter.write({ path: "notes/down.md", content: "hello" });
+    expect(result).toEqual({ delivered: false, queued: true });
+    expect(adapter.pendingCount()).toBe(1);
+  });
+
+  it("queues on a network error too (fetch rejects), not only on a non-2xx", async () => {
+    mockFetch.mockRejectedValueOnce(new TypeError("fetch failed"));
+    const result = await adapter.write({ path: "notes/net.md", content: "hello" });
+    expect(result.delivered).toBe(false);
+    expect(adapter.pendingCount()).toBe(1);
+  });
+
+  it("a later successful write for the same path clears its queue entry", async () => {
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 502, statusText: "Bad Gateway" });
+    await adapter.write({ path: "notes/flap.md", content: "v1" });
+    expect(adapter.pendingCount()).toBe(1);
+    mockFetch.mockResolvedValueOnce({ ok: true, status: 204, statusText: "No Content" });
+    const result = await adapter.write({ path: "notes/flap.md", content: "v2" });
+    expect(result).toEqual({ delivered: true });
+    expect(adapter.pendingCount()).toBe(0);
+  });
+});
+
 describe("ObsidianRestAdapter.list", () => {
   it("accepts an empty string (vault root) and returns the listed files", async () => {
     mockFetch.mockResolvedValueOnce({

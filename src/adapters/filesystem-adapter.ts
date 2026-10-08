@@ -1,7 +1,7 @@
 import { mkdirSync, existsSync } from "fs";
 import { readFile, writeFile, access, rename } from "fs/promises";
 import { join, dirname, resolve, relative, isAbsolute } from "path";
-import type { VaultAdapter, VaultWriteOptions } from "./vault-adapter.js";
+import type { VaultAdapter, VaultWriteOptions, VaultWriteResult } from "./vault-adapter.js";
 
 export class FilesystemAdapter implements VaultAdapter {
   constructor(private vaultRoot: string) {}
@@ -17,11 +17,12 @@ export class FilesystemAdapter implements VaultAdapter {
     return resolved;
   }
 
-  async write({ path, content, overwrite = true }: VaultWriteOptions): Promise<void> {
+  async write({ path, content, overwrite = true }: VaultWriteOptions): Promise<VaultWriteResult> {
     const fullPath = this.safePath(path);
-    if (!overwrite && existsSync(fullPath)) return;
+    if (!overwrite && existsSync(fullPath)) return { delivered: true };
     mkdirSync(dirname(fullPath), { recursive: true });
     await writeFile(fullPath, content, "utf-8");
+    return { delivered: true };
   }
 
   async read(path: string): Promise<string> {

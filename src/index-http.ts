@@ -11,6 +11,7 @@ import { loadConfig } from "./config.js";
 import { loadIngestionConfig } from "./ingestion/config.js";
 import { cronHealth } from "./ingestion/cron-health.js";
 import { getEmbedderHealth } from "./embeddings/openai-embedder.js";
+import { buildHealthPayload } from "./health-payload.js";
 import { createServer } from "./server.js";
 import { setupTriggers } from "./triggers.js";
 import { SingleUserOAuthProvider } from "./oauth-provider.js";
@@ -51,8 +52,9 @@ let synthesis: ReturnType<typeof createServer>["synthesis"];
 let store: ReturnType<typeof createServer>["store"];
 let embedder: ReturnType<typeof createServer>["embedder"];
 let indexer: ReturnType<typeof createServer>["indexer"];
+let adapter: ReturnType<typeof createServer>["adapter"];
 try {
-  ({ makeMcpServer, synthesis, store, embedder, indexer } = createServer(config));
+  ({ makeMcpServer, synthesis, store, embedder, indexer, adapter } = createServer(config));
 } catch (err) {
   console.error("[startup] Failed to create server:", err);
   process.exit(1);
@@ -147,28 +149,17 @@ app.use(mcpAuthRouter({ provider: oauthProvider, issuerUrl, resourceServerUrl })
 // Includes cron job status; returns 503 if any job is in error or stale.
 app.get("/health", (_req, res) => {
   cronHealth.checkStale();
-  const jobs = cronHealth.getAll();
-  // The embedder is a PAID remote dependency whose death is silent by design (search degrades to lexical,
-  // ingest queues). Silent is right for availability and wrong for operations -- so it is reported here, with
-  // its reason, plus the depth and age of the write queue it strands. See openai-embedder.getEmbedderHealth.
-  const embedderHealth = getEmbedderHealth();
-  const queueDepth = store.pendingEmbedCount();
-  const embedderOk = embedderHealth.ok || embedderHealth.failure_kind === "transient";
-  const healthy = cronHealth.isHealthy() && embedderOk;
-  res.status(healthy ? 200 : 503).json({
-    status: healthy ? "ok" : "degraded",
-    service: "nullsafe-second-brain",
-    timestamp: new Date().toISOString(),
-    crons: jobs,
-    embedder: {
-      ...embedderHealth,
-      // Queue depth is the SECOND-ORDER alarm: if the embedder recovers but this keeps climbing, the drain
-      // is broken rather than the provider, and those are different problems with different fixes.
-      pending_embed: queueDepth,
-      pending_embed_oldest_age_hours: store.pendingEmbedOldestAgeHours(),
-      pending_index: store.pendingIndexCount(),
-    },
+  // Body shape + status rule live in health-payload.ts (pure, tested). This handler only gathers inputs.
+  const body = buildHealthPayload({
+    crons: cronHealth.getAll(),
+    cronsHealthy: cronHealth.isHealthy(),
+    embedder: getEmbedderHealth(),
+    pendingEmbed: store.pendingEmbedCount(),
+    pendingEmbedOldestAgeHours: store.pendingEmbedOldestAgeHours(),
+    pendingIndex: store.pendingIndexCount(),
+    vaultQueuePending: adapter.pendingCount?.() ?? 0,
   });
+  res.status(body.status === "ok" ? 200 : 503).json(body);
 });
 
 // Bearer auth guard on all /mcp routes

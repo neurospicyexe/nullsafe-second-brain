@@ -32,7 +32,7 @@ function makeMockVault(): { adapter: VaultAdapter; writes: CapturedWrite[]; dele
   const writes: CapturedWrite[] = [];
   const deletes: string[] = [];
   const adapter: VaultAdapter = {
-    write: async ({ path, content }) => { writes.push({ path, content }); },
+    write: async ({ path, content }) => { writes.push({ path, content }); return { delivered: true }; },
     read: async () => "",
     exists: async () => false,
     list: async () => [],
@@ -47,6 +47,59 @@ beforeEach(() => {
 });
 
 describe("runVaultMaterializer", () => {
+  it("counts a queued (undelivered) write as queued, not written, and does not PATCH vault_path for it", async () => {
+    // Adapter that behaves like ObsidianRestAdapter with the tunnel down: accepts, queues, reports undelivered.
+    const writes: CapturedWrite[] = [];
+    const adapter: VaultAdapter = {
+      write: async ({ path, content }) => { writes.push({ path, content }); return { delivered: false, queued: true }; },
+      read: async () => "",
+      exists: async () => false,
+      list: async () => [],
+      move: async () => undefined,
+      delete: async () => undefined,
+    };
+    const config = makeConfig();
+    const patches: string[] = [];
+
+    const fetchMock = vi.fn(async (url: string, init?: any) => {
+      if (url.endsWith("/mind/growth/unmaterialized/cypher?limit=100")) {
+        return new Response(JSON.stringify({
+          journal: [{
+            id: "jq1",
+            entry_type: "insight",
+            content: "A write that is queued is not a write that happened.",
+            tags_json: JSON.stringify(["ops"]),
+            source: "autonomous",
+            created_at: "2026-10-08T03:00:00Z",
+            prehended_ids: "[]",
+            evidence_json: "[]",
+            novelty: "new",
+          }],
+          patterns: [],
+          markers: [],
+        }), { status: 200 });
+      }
+      if (url.includes("/mind/growth/unmaterialized/")) {
+        return new Response(JSON.stringify({ journal: [], patterns: [], markers: [] }), { status: 200 });
+      }
+      if (url.includes("/mind/growth/") && init?.method === "PATCH") {
+        patches.push(url);
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await runVaultMaterializer(config, adapter);
+
+    expect(writes.length).toBe(1);
+    expect(result.queued).toBe(1);
+    expect(result.written).toBe(0);
+    expect(result.failed).toBe(0);
+    expect(patches).toEqual([]);
+    expect(result.perCompanion.cypher).toBe(0);
+  });
+
   it("writes structured .md per row, resolves same-tick wikilinks, falls back to [[halseth/<id>]] for unresolved cross-tick refs, PATCHes vault_path", async () => {
     const { adapter, writes } = makeMockVault();
     const config = makeConfig();
