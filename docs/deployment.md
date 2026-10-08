@@ -77,6 +77,16 @@ Corollaries:
 - `systemctl show second-brain.service -p Environment` reveals baked values; `EnvironmentFile`
   values do not appear there, which is the point.
 
+## Live-unit drift (found 2026-10-08, open)
+
+The live `/etc/systemd/system/second-brain.service` still carries a baked
+`Environment=SB_INGEST_KEY=...` line, and `.env` does NOT contain `SB_INGEST_KEY` (checked by name
+only). `deploy/second-brain.service` omits the baked line on purpose. **Do not install the repo
+unit over the live one until `SB_INGEST_KEY` has been added to `.env`**, or ingest auth
+(`/ingest`, read in `src/index-http.ts`) dies silently. Order: rotate the key (its value reached a
+transcript), put the new value in `.env`, install the repo unit, `daemon-reload`, restart, confirm
+`/health` and one authenticated `/ingest` call.
+
 ## Companion pieces
 
 - `docs/security-audit.md`: open OWASP findings.
