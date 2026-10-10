@@ -499,6 +499,12 @@ app.post("/ingest/corpus-file", async (req: Request, res: Response): Promise<voi
         let chunksSkipped = 0;
 
         try {
+          // Same pre-chunk skip as processCorpus: the chunk call is paid, so a re-sent file whose
+          // chunk 0 already exists is skipped before the model runs, not after.
+          if (store.existsByPath(`rag/${sourceType}/${filename}/0`)) {
+            console.log(`[ingest/corpus-file] ${filename}: already indexed, skipped before chunking`);
+            continue;
+          }
           const chunks = await semanticChunk(f.content as string, ingestionConfig!);
           console.log(`[ingest/corpus-file] ${filename}: ${chunks.length} chunks`);
 

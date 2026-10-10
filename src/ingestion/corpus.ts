@@ -66,6 +66,18 @@ export async function processCorpus(
 
   for (const filePath of files) {
     const fileName = path.basename(filePath)
+
+    // Skip BEFORE chunking: semanticChunk is a paid model call that re-emits the whole file as
+    // chunk JSON. The per-chunk existsByPath check below used to be the only dedup, so every
+    // 6h cron re-chunked all 57 intake files (~2M tokens in + ~1M out per pass, 4-5h each) and
+    // then threw every chunk away as "skipped" -- ~80% of the DeepInfra bill from 09-02 to
+    // 10-10, and the DeepSeek-direct balance drain before that. Chunk 0 is the per-file marker:
+    // chunking is non-deterministic, so later indices never lined up run-to-run anyway.
+    if (!options.force && store.existsByPath(`rag/${options.sourceType}/${fileName}/0`)) {
+      totalSkipped++
+      continue
+    }
+
     console.log(`[corpus] chunking ${fileName}`)
 
     let content: string

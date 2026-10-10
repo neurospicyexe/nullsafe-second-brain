@@ -115,11 +115,55 @@ describe('processCorpus', () => {
       embedder as never,
     )
 
-    expect(mockSemanticChunk).toHaveBeenCalledOnce()
+    // The paid chunking call must not run for a file that is already indexed (chunk 0 present).
+    expect(mockSemanticChunk).not.toHaveBeenCalled()
     expect(store.existsByPath).toHaveBeenCalledWith('rag/historical_corpus/convo1.md/0')
     expect(mockWrapChunk).not.toHaveBeenCalled()
     expect(embedder.embed).not.toHaveBeenCalled()
     expect(store.insert).not.toHaveBeenCalled()
+  })
+
+  it('force re-chunks an already-indexed file', async () => {
+    mockReaddirSync.mockReturnValue([dirent('convo1.md')])
+    mockReadFileSync.mockReturnValue('Some markdown content')
+    mockSemanticChunk.mockResolvedValue([{ label: 'Opening', content: 'First chunk.' }])
+    mockWrapChunk.mockResolvedValue('wrapped')
+    const store = { ...makeMockStore(true), deleteByPath: vi.fn() }
+    const embedder = makeMockEmbedder()
+
+    await processCorpus(
+      { intakeDir: '/fake/dir', sourceType: 'historical_corpus', force: true },
+      mockConfig,
+      store as never,
+      embedder as never,
+    )
+
+    expect(mockSemanticChunk).toHaveBeenCalledOnce()
+    expect(store.deleteByPath).toHaveBeenCalledWith('rag/historical_corpus/convo1.md/0')
+    expect(store.insert).toHaveBeenCalledOnce()
+  })
+
+  it('chunks only the new file when one of two is already indexed', async () => {
+    mockReaddirSync.mockReturnValue([dirent('old.md'), dirent('new.md')])
+    mockReadFileSync.mockReturnValue('Some markdown content')
+    mockSemanticChunk.mockResolvedValue([{ label: 'Opening', content: 'First chunk.' }])
+    mockWrapChunk.mockResolvedValue('wrapped')
+    const store = {
+      existsByPath: vi.fn((p: string) => p.startsWith('rag/historical_corpus/old.md/')),
+      insert: vi.fn(),
+    }
+    const embedder = makeMockEmbedder()
+
+    await processCorpus(
+      { intakeDir: '/fake/dir', sourceType: 'historical_corpus' },
+      mockConfig,
+      store as never,
+      embedder as never,
+    )
+
+    expect(mockSemanticChunk).toHaveBeenCalledOnce()
+    expect(store.insert).toHaveBeenCalledOnce()
+    expect(store.insert.mock.calls[0][0].vault_path).toBe('rag/historical_corpus/new.md/0')
   })
 
   it('calls semanticChunk, wrapChunk, embedder.embed, store.insert for new files', async () => {
