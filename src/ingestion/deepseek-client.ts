@@ -21,6 +21,7 @@
 //     key and the emergency lane stays unarmed (warned once). It is never sent to api.deepseek.com.
 
 import { withOwnerPronounRule } from '../pronoun-rule.js'
+import { fetchHouseholdFacts, householdGroundingBlock, type HouseholdGroundingConfig } from './household-grounding.js'
 
 export const DEEPINFRA_BASE_URL = 'https://api.deepinfra.com/v1/openai'
 export const DEEPSEEK_DIRECT_BASE_URL = 'https://api.deepseek.com'
@@ -182,14 +183,28 @@ export async function chatComplete(req: ChatRequest, config: VendorConfig, env: 
   return { ok: false, ...last }
 }
 
-/** Single-prompt helper used by pattern synthesis, persona feeder and the inbox classifier. */
-export async function callDeepSeek(apiKey: string, model: string, prompt: string): Promise<string> {
+/**
+ * Single-prompt helper used by pattern synthesis, persona feeder and the inbox classifier.
+ *
+ * `grounding` (2026-10-11): pass Halseth's url/secret from any caller that WRITES PROSE about
+ * Raziel's household (pattern synthesis, signal audit, persona feeder) and the household rule +
+ * canonical animals record ride in the system message, exactly as wrapChunk's do. Omit it for pure
+ * classifiers (the inbox filer returns a folder decision, not prose). Fails open: no facts -> the
+ * rule alone.
+ */
+export async function callDeepSeek(
+  apiKey: string,
+  model: string,
+  prompt: string,
+  grounding?: HouseholdGroundingConfig,
+): Promise<string> {
+  const household = grounding ? householdGroundingBlock(await fetchHouseholdFacts(grounding)) : ''
   const result = await chatComplete({
     // This is the shared ingestion chokepoint -- callers pass only a user prompt, so the owner
     // pronoun rule rides as its own system message rather than being spliced into their prompt
     // text (2026-09-24; Raziel called "she" in synthesized session prose).
     messages: [
-      { role: 'system', content: withOwnerPronounRule('') },
+      { role: 'system', content: withOwnerPronounRule(household) },
       { role: 'user', content: prompt },
     ],
     maxTokens: 800,

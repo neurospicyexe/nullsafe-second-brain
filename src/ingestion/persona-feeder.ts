@@ -143,7 +143,7 @@ export async function runPersonaFeeder(config: IngestionConfig): Promise<void> {
       console.log(`[persona-feeder] ${companionId}: ${organicTexts.length} organic records, extracting blocks`)
 
       const prompt = buildExtractionPrompt(companionId, organicTexts)
-      const response = await callDeepSeek(config.deepseekApiKey, config.deepseekModel, prompt)
+      const response = await callDeepSeek(config.deepseekApiKey, config.deepseekModel, prompt, config)
       const blocks = parseVoiceBlocks(response)
 
       if (blocks.length === 0) {

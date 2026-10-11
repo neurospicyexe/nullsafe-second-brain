@@ -157,7 +157,7 @@ export async function runPatternSynthesis(config: IngestionConfig): Promise<void
       }
 
       const prompt = buildPrompt(companionId, corpus)
-      const synthesis = await callDeepSeek(config.deepseekApiKey, config.deepseekModel, prompt)
+      const synthesis = await callDeepSeek(config.deepseekApiKey, config.deepseekModel, prompt, config)
 
       const noteText = `[pattern_synthesis | window: last ${WINDOW_DAYS}d | records: ${companionRecords.length}]\n\n${synthesis}`
 
@@ -209,7 +209,7 @@ export async function runSignalAudit(config: IngestionConfig): Promise<void> {
       }
 
       const prompt = buildSignalAuditPrompt(companionId, corpus)
-      const auditText = await callDeepSeek(config.deepseekApiKey, config.deepseekModel, prompt)
+      const auditText = await callDeepSeek(config.deepseekApiKey, config.deepseekModel, prompt, config)
 
       const noteText = `[signal_audit | window: last ${WINDOW_DAYS}d | records: ${companionRecords.length}]\n\n${auditText}`
 

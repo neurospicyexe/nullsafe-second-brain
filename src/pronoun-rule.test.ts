@@ -84,3 +84,25 @@ describe('ingestion callers send the pronoun rule as a system message', () => {
     expect(systemMsg?.content.split(OWNER_PRONOUN_RULE)).toHaveLength(2)  // exactly once
   })
 })
+
+describe('household grounding on the shared callDeepSeek client', () => {
+  it('rides in the system message when grounding is passed, alongside the pronoun rule', async () => {
+    const { resetHouseholdFactsCache, HOUSEHOLD_GROUNDING_RULE } = await import('./ingestion/household-grounding.js')
+    resetHouseholdFactsCache()
+    const mockFetch = vi.fn().mockImplementation(async (url: string) =>
+      String(url).includes('/identity/architect-facts')
+        ? { ok: true, json: async () => ({ facts: [{ fact: 'Lucy is a Dalmatian', category: 'animals', status: 'active' }] }) }
+        : { ok: true, json: async () => ({ choices: [{ message: { content: 'ok' } }] }) })
+    vi.stubGlobal('fetch', mockFetch)
+
+    await callDeepSeek('test-key', 'deepseek-v4-flash', 'user prompt', { halsethUrl: 'https://h.example', halsethSecret: 's' })
+
+    const call = mockFetch.mock.calls.find(c => !String(c[0]).includes('/identity/architect-facts'))!
+    const body = JSON.parse(String((call[1] as RequestInit).body))
+    const sys = body.messages.find((m: { role: string }) => m.role === 'system').content as string
+    expect(sys).toContain(HOUSEHOLD_GROUNDING_RULE)
+    expect(sys).toContain('Lucy is a Dalmatian')
+    expect(sys).toContain(OWNER_PRONOUN_RULE)
+    resetHouseholdFactsCache()
+  })
+})
