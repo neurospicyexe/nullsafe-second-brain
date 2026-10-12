@@ -3,6 +3,7 @@ import * as sqliteVec from "sqlite-vec";
 import { randomUUID } from "crypto";
 import { emotionResonance } from "./emotion-space.js";
 import { recencyBoost, recencyWeight, recencyHalfLifeDays } from "./recency.js";
+import { transcriptCreatedAt, TRANSCRIPT_GLOBS } from "./transcript-date.js";
 
 /**
  * THE CHATTER LANE: searchable, barred from the recency lanes (2026-08-10).
@@ -22,7 +23,12 @@ import { recencyBoost, recencyWeight, recencyHalfLifeDays } from "./recency.js";
  * fully retrievable by relevance (pool 1, and recall mode) and is excluded here. That lets the length gates
  * come down without regrowing the noise pool that made recall unusable.
  */
-const NOT_CHATTER_SQL = "COALESCE(section, '') != 'discord-live'";
+// The `chatter` TAG bars the export transcripts (claude_ai_transcript / chatgpt_transcript) too. Until
+// 2026-10-12 only the discord-live SECTION was barred, so ~48k verbatim export chunks sat in the novelty pool
+// at novelty 1.0 and were surfaced into query-blind lanes (all 47,700 had last_surfaced_at set, 3-5k per day)
+// while the ingest docs promised they were "barred from recency lanes". Still fully retrievable by
+// relevance: pool 1 and recall mode do not use this clause.
+const NOT_CHATTER_SQL = "COALESCE(section, '') != 'discord-live' AND tags NOT LIKE '%\"chatter\"%'";
 
 /**
  * NO COMPANION'S LIVE LINES ARE RECALL (2026-09-26; halseth mig 0132, the imp tray).
@@ -56,6 +62,8 @@ export interface ChunkInsert {
   tags: string[];
   /** Emotional valence at encoding time (e.g. the feeling's emotion label). Drives resonance boost. */
   valence?: string | null;
+  /** Override created_at (SQLite datetime, UTC). Default: derived from an export-transcript path, else now. */
+  created_at?: string;
 }
 
 export interface ChunkRow {
@@ -169,6 +177,12 @@ export class VectorStore {
     this.db.prepare(
       "UPDATE embeddings SET prefixed_text = chunk_text WHERE prefixed_text IS NULL AND chunk_text IS NOT NULL AND chunk_text != ''"
     ).run();
+
+    // One-time, idempotent: export-transcript chunks indexed before 2026-10-12 carry their INSERT time as
+    // created_at, not the conversation date (see transcript-date.ts). Corrected from the path. The AFTER UPDATE
+    // trigger re-syncs FTS5 per row, so the first boot after deploy pays for it once (~48k rows); every later
+    // boot matches zero rows because of the `created_at != date` guard.
+    this.backfillTranscriptDates();
 
     // ANN index (sqlite-vec): build a vec0 KNN table over the embeddings we ALREADY have, so
     // purely conceptual queries (sharing no keywords with the text) still surface relevant chunks.
@@ -417,16 +431,35 @@ export class VectorStore {
     }
   }
 
+  /** Returns the number of rows corrected. Safe to call repeatedly. */
+  backfillTranscriptDates(): number {
+    const where = TRANSCRIPT_GLOBS.map(() => "vault_path GLOB ?").join(" OR ");
+    const rows = this.db.prepare(
+      `SELECT rowid, vault_path, created_at FROM embeddings WHERE ${where}`
+    ).all(...TRANSCRIPT_GLOBS) as Array<{ rowid: number; vault_path: string; created_at: string }>;
+    const upd = this.db.prepare("UPDATE embeddings SET created_at = ? WHERE rowid = ?");
+    let n = 0;
+    this.db.transaction(() => {
+      for (const r of rows) {
+        const want = transcriptCreatedAt(r.vault_path);
+        if (want && r.created_at !== want) { upd.run(want, r.rowid); n++; }
+      }
+    })();
+    if (n > 0) console.log(`[vector-store] transcript created_at backfill: ${n} chunks dated by conversation`);
+    return n;
+  }
+
   insert(chunk: ChunkInsert): string {
     const id = randomUUID();
     const info = this.db.prepare(`
       INSERT INTO embeddings
-        (id, vault_path, companion, content_type, chunk_text, prefixed_text, section, chunk_index, embedding, tags, valence)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (id, vault_path, companion, content_type, chunk_text, prefixed_text, section, chunk_index, embedding, tags, valence, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP))
     `).run(
       id, chunk.vault_path, chunk.companion, chunk.content_type, chunk.chunk_text,
       chunk.prefixed_text ?? null, chunk.section ?? null, chunk.chunk_index ?? null,
-      JSON.stringify(chunk.embedding), JSON.stringify(chunk.tags), chunk.valence ?? null
+      JSON.stringify(chunk.embedding), JSON.stringify(chunk.tags), chunk.valence ?? null,
+      chunk.created_at ?? transcriptCreatedAt(chunk.vault_path)
     );
 
     // Keep the ANN index in sync. rowid must be bound as BigInt for vec0 (better-sqlite3 binds
