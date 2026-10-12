@@ -31,7 +31,28 @@ ssh vps 'curl -s localhost:3001/health'
 table, the embedder state (`pending_embed`, `pending_index`) and `vault_queue_pending`, the number of
 vault writes the ObsidianRestAdapter has queued because Obsidian or its tunnel was unreachable. A
 climbing `vault_queue_pending` with a healthy embedder means the Windows side is down, not this
-service.
+service. The BBH health-check cron warns on it (`second_brain:vault_queue`, `SB_VAULT_QUEUE_WARN`).
+
+## The vault write path (since 2026-10-11, K17)
+
+The vault lives on the workstation; this service reaches Obsidian's Local REST API through a
+**private reverse SSH tunnel**, not a public hostname:
+
+| | |
+|---|---|
+| Workstation side | `halseth/scripts/obsidian-tunnel.ps1`, Startup-folder shortcut, holds `ssh -R 127.0.0.1:27124:127.0.0.1:27124 vps` |
+| VPS side | `127.0.0.1:27124` (check: `ss -ltn \| grep 27124`) |
+| Config | `obsidian_rest.url = https://127.0.0.1:27124` in `second-brain.config.json` |
+| TLS trust | `NODE_EXTRA_CA_CERTS=/home/nullsafe/nullsafe-second-brain/obsidian-rest.crt` in `.env` |
+
+The plugin's cert is self-signed with SAN `IP:127.0.0.1` and expires **2027-04-26**. The port is the
+same on both ends so that SAN matches. If the plugin regenerates its cert (or it expires), refresh
+the copy: on the workstation `openssl s_client -connect 127.0.0.1:27124 </dev/null | openssl x509
+> obsidian-rest.crt`, `scp` it over, chmod 600, restart. Symptom of a stale cert: queue climbs while
+`ss` shows the tunnel bound; `journalctl` shows a TLS error on `[obsidian-rest]`.
+
+The previous path, `obsidian.softcrashentity.com`, rode the workstation's `lmstudio` Cloudflare
+tunnel and died with it under K16 (2026-10-07). Nothing here depends on cloudflared any more.
 
 ## Status and logs
 
