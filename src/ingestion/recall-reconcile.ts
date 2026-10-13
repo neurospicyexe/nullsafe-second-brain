@@ -36,7 +36,7 @@
 
 import type { IngestionConfig } from './types.js'
 import { loadHwm, saveHwm, getHwm, setHwm } from './hwm.js'
-import { retractPath, journalMirrorPath, ledgerMirrorPath, type RetractableStore } from '../retract.js'
+import { retractPath, journalMirrorPath, ledgerMirrorPath, continuityMirrorPath, type RetractableStore } from '../retract.js'
 
 export const RECONCILE_HWM_KEY = 'recall_ineligible_journal'
 export const RECONCILE_FULL_AT_KEY = 'recall_reconcile_full_at'
@@ -74,6 +74,16 @@ export const LEDGER_RECONCILE_FEED: ReconcileFeed = {
   label: 'ledger-reconcile', endpoint: '/ingest/ledger-ineligible',
   hwmKey: LEDGER_RECONCILE_HWM_KEY, fullAtKey: LEDGER_RECONCILE_FULL_AT_KEY, mirrorPath: ledgerMirrorPath,
   persistAfterId: true,
+}
+
+// The continuity-note purge feed (2026-10-13): notes that must not have a search mirror (a draft, a drop,
+// an archive, a type outside halseth's allowlist). Same keyset contract as the journal feed (ties are
+// included when after_id is empty), so it needs no persisted after_id. Own marks.
+export const CONTINUITY_RECONCILE_HWM_KEY = 'recall_ineligible_continuity'
+export const CONTINUITY_RECONCILE_FULL_AT_KEY = 'recall_reconcile_continuity_full_at'
+export const CONTINUITY_RECONCILE_FEED: ReconcileFeed = {
+  label: 'continuity-reconcile', endpoint: '/ingest/continuity-ineligible',
+  hwmKey: CONTINUITY_RECONCILE_HWM_KEY, fullAtKey: CONTINUITY_RECONCILE_FULL_AT_KEY, mirrorPath: continuityMirrorPath,
 }
 
 /** The hwm key holding a reconcile feed's tiebreak id beside its mark. */
@@ -173,6 +183,15 @@ export async function runLedgerReconcile(
   opts: ReconcileOpts = {},
 ): Promise<ReconcileResult> {
   return runFeedReconcile(LEDGER_RECONCILE_FEED, config, store, opts)
+}
+
+/** Purge rag/wm_continuity_notes/<id> for every note that is not searchable (GET /ingest/continuity-ineligible). */
+export async function runContinuityReconcile(
+  config: IngestionConfig,
+  store: RetractableStore,
+  opts: ReconcileOpts = {},
+): Promise<ReconcileResult> {
+  return runFeedReconcile(CONTINUITY_RECONCILE_FEED, config, store, opts)
 }
 
 export async function runFeedReconcile(

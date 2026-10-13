@@ -17,6 +17,7 @@ export const ALL_PULLERS: Array<{ source: string; pull: PullFn; isUpdate?: boole
   { source: 'relational_delta', pull: pullRelationalDeltas },
   { source: 'feeling', pull: pullFeelings },
   { source: 'companion_journal', pull: pullCompanionJournal },
+  { source: 'wm_continuity_notes', pull: pullContinuityNotes },
   { source: 'inter_companion_note', pull: pullInterCompanionNotes },
   { source: 'handoff', pull: pullHandoffs },
   { source: 'wound', pull: pullWounds },
@@ -157,6 +158,54 @@ export async function pullFeelings(
       created_at: rec.created_at,
       companion_id: rec.companion_id,
     }))
+    return { records }
+  } catch (e) {
+    return { records: [], error: (e as Error).message }
+  }
+}
+
+interface RawContinuityNote {
+  note_id: string
+  agent_id: string
+  note_type: string
+  content: string
+  salience?: string
+  source?: string
+  created_at: string
+  /** When the note became memory (its keep, or its birth if born kept), normalised ISO. */
+  cursor_at?: string
+  [key: string]: unknown
+}
+
+// Continuity notes (2026-10-13). A companion's continuity notes followed it across substrates (its own
+// boot reads them) and stopped there: Drevan captured Abby's death in a Claude.ai thread, his Discord
+// boot knew it, Cypher's search found nothing, and Raziel had to retell it. Halseth serves only kept,
+// live notes of an allowlisted type (never a draft, never thread_key); /ingest/continuity-ineligible
+// is the paired purge (recall-reconcile.ts). The feed is STRICTLY after `since`, ordered
+// (cursor_at, note_id), with the ledger's after_id tiebreak so a page edge on a tie loses nothing.
+export async function pullContinuityNotes(
+  config: IngestionConfig,
+  since?: string,
+  afterId?: string,
+): Promise<PullerResult> {
+  try {
+    const url = buildUrl(config.halsethUrl, '/ingest/continuity-notes', since, 100, since && afterId ? { after_id: afterId } : {})
+    const raw = await fetchRecords(url, config.halsethSecret)
+    const records: IngestRecord[] = []
+    for (const rec of raw as RawContinuityNote[]) {
+      if (!rec || typeof rec.note_id !== 'string' || !rec.note_id || typeof rec.content !== 'string') continue
+      // cursor_at is transport, not content: keep it out of the vault document.
+      const { cursor_at, ...row } = rec
+      records.push({
+        id: rec.note_id as unknown as number,
+        source_type: 'wm_continuity_notes',
+        content: JSON.stringify(row),
+        created_at: rec.created_at,
+        ...(typeof cursor_at === 'string' && cursor_at ? { cursor: cursor_at } : {}),
+        cursor_id: rec.note_id,
+        companion_id: rec.agent_id,
+      })
+    }
     return { records }
   } catch (e) {
     return { records: [], error: (e as Error).message }

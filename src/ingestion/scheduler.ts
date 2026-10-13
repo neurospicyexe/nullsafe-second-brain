@@ -14,7 +14,7 @@ import { runInboxFiler, buildClassifyPrompt, parseDecision } from './inbox-filer
 import { callDeepSeek } from './deepseek-client.js'
 import { Indexer } from '../indexer.js'
 import { cronHealth } from './cron-health.js'
-import { runRecallReconcile, runLedgerReconcile } from './recall-reconcile.js'
+import { runRecallReconcile, runLedgerReconcile, runContinuityReconcile } from './recall-reconcile.js'
 
 // NOTE: pattern-synthesizer.ts (runPatternSynthesis / runSignalAudit) is
 // retired as of migration 0062. The autonomous worker now writes structured
@@ -69,6 +69,13 @@ export function startIngestionScheduler(
       await runLedgerReconcile(config, store, { forceFull })
     } catch (err) {
       console.error(`[ledger-reconcile] error: ${err instanceof Error ? err.message : String(err)}`)
+    }
+    // Continuity notes (2026-10-13): a note dropped, released or retracted after it was mirrored loses
+    // its mirror. Own marks, same cadence, before the pull, never fatal.
+    try {
+      await runContinuityReconcile(config, store, { forceFull })
+    } catch (err) {
+      console.error(`[continuity-reconcile] error: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
 

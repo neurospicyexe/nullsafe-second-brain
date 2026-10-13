@@ -19,6 +19,7 @@ export type SourceType =
   | 'live_thread'
   | 'basin_history'
   | 'ledger'
+  | 'wm_continuity_notes'
 
 export interface IngestRecord {
   id: number

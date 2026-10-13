@@ -61,6 +61,14 @@ export function journalMirrorPath(id: string | number): string {
   return `rag/companion_journal/${id}`;
 }
 
+/**
+ * The rag/ mirror path of a wm_continuity_notes row (2026-10-13), exactly as the ingestion pipeline writes
+ * it: the source type IS the table name, as with companion_journal, so the existing RETRACTABLE prefix
+ * `rag/wm_continuity_notes/` already covers a hand retraction of one.
+ */
+export function continuityMirrorPath(id: string | number): string {
+  return `rag/wm_continuity_notes/${id}`;
+}
 /** The rag/ mirror path of a ledger_entries row, exactly as the ingestion pipeline writes it (2026-09-26). */
 export function ledgerMirrorPath(id: string | number): string {
   return `rag/ledger/${id}`;
