@@ -7,8 +7,8 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import {
-  resolveVendors, chatComplete, resetVendorWarnings, wireMaxTokens,
-  DEEPINFRA_FLASH_MODEL, DEEPSEEK_DIRECT_MODEL, FELL_BACK_TAG, REASONING_HEADROOM,
+  resolveVendors, chatComplete, resetVendorWarnings, wireMaxTokens, formatUsageLine, callDeepSeek,
+  DEEPINFRA_FLASH_MODEL, DEEPSEEK_DIRECT_MODEL, FELL_BACK_TAG, REASONING_HEADROOM, USAGE_TAG,
 } from './deepseek-client.js'
 import { wrapChunk } from './deepseek-wrapper.js'
 import { semanticChunk } from './chunker.js'
@@ -16,8 +16,11 @@ import { semanticChunk } from './chunker.js'
 const DI = 'https://api.deepinfra.com/v1/openai/chat/completions'
 const DS = 'https://api.deepseek.com/chat/completions'
 
-function ok(content: string) {
-  return { ok: true, status: 200, json: async () => ({ choices: [{ message: { content }, finish_reason: 'stop' }] }), text: async () => '' }
+function ok(content: string, usage?: Record<string, unknown>) {
+  return {
+    ok: true, status: 200, text: async () => '',
+    json: async () => ({ choices: [{ message: { content }, finish_reason: 'stop' }], ...(usage ? { usage } : {}) }),
+  }
 }
 function fail(status: number) {
   return { ok: false, status, json: async () => ({}), text: async () => 'nope' }
@@ -30,10 +33,13 @@ const auth = (fn: { mock: { calls: any[][] } }, i: number) => (fn.mock.calls[i]!
 const body = (fn: { mock: { calls: any[][] } }, i: number) => JSON.parse(String(fn.mock.calls[i]![1].body))
 
 let warn: ReturnType<typeof vi.spyOn>
+let log: ReturnType<typeof vi.spyOn>
 const warnLines = (): string[] => (warn.mock.calls as unknown[][]).map((c) => String(c[0]))
+const usageLines = (): string[] => (log.mock.calls as unknown[][]).map((c) => String(c[0])).filter((l) => l.startsWith(USAGE_TAG))
 beforeEach(() => {
   resetVendorWarnings()
   warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  log = vi.spyOn(console, 'log').mockImplementation(() => {})
 })
 afterEach(() => {
   vi.restoreAllMocks()
@@ -133,6 +139,49 @@ describe('chatComplete', () => {
   it('reports the last failure when every vendor fails', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => fail(402)))
     expect(await chatComplete(req, cfg, env)).toMatchObject({ ok: false, status: 402 })
+  })
+
+  it('prints ONE usage line per 2xx, attributed to the caller and the vendor that answered', async () => {
+    const usage = { prompt_tokens: 1200, completion_tokens: 40, prompt_tokens_details: { cached_tokens: 300 }, estimated_cost: 0.00008 }
+    vi.stubGlobal('fetch', vi.fn(async () => ok('fine', usage)))
+    await chatComplete(req, cfg, env)
+    expect(usageLines()).toEqual([
+      `${USAGE_TAG} provider=DeepInfra model=${DEEPINFRA_FLASH_MODEL} caller=t in=1200 out=40 cached=300 reasoning=0 cost=0.00008`,
+    ])
+  })
+
+  it('still counts the call when the body has no usage object, and on the fallback vendor', async () => {
+    const fn = vi.fn().mockResolvedValueOnce(fail(503)).mockResolvedValueOnce(ok('rescued'))
+    vi.stubGlobal('fetch', fn)
+    await chatComplete(req, cfg, env)
+    expect(usageLines()).toEqual([`${USAGE_TAG} provider=DeepSeek model=${DEEPSEEK_DIRECT_MODEL} caller=t usage=absent`])
+  })
+
+  it('prints nothing for a non-2xx', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => fail(400)))
+    await chatComplete(req, cfg, env)
+    expect(usageLines()).toEqual([])
+  })
+})
+
+describe('formatUsageLine', () => {
+  it('reads the DeepSeek-native cache field and the reasoning subset', () => {
+    const line = formatUsageLine('DeepInfra', 'm', 'x', {
+      prompt_tokens: 10, completion_tokens: 7, prompt_cache_hit_tokens: 4, completion_tokens_details: { reasoning_tokens: 5 },
+    })
+    expect(line).toBe(`${USAGE_TAG} provider=DeepInfra model=m caller=x in=10 out=7 cached=4 reasoning=5 cost=-`)
+  })
+
+  it('never emits NaN or negatives; blank caller prints "-"', () => {
+    const line = formatUsageLine('DeepSeek', 'm', '', { prompt_tokens: -3, completion_tokens: Number.NaN, estimated_cost: Number.NaN })
+    expect(line).toBe(`${USAGE_TAG} provider=DeepSeek model=m caller=- in=0 out=0 cached=0 reasoning=0 cost=-`)
+  })
+
+  it('callDeepSeek labels the line with the worker name it was given', async () => {
+    vi.stubEnv('DEEPINFRA_API_KEY', 'di')
+    vi.stubGlobal('fetch', vi.fn(async () => ok('text', { prompt_tokens: 1, completion_tokens: 1 })))
+    await callDeepSeek('ds', 'deepseek-v4-flash', 'p', undefined, 'persona-feeder')
+    expect(usageLines()[0]).toContain('caller=persona-feeder')
   })
 })
 

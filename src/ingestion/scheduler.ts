@@ -297,7 +297,7 @@ export function startIngestionScheduler(
           {
             vault,
             classify: async (note) => parseDecision(
-              await callDeepSeek(config.deepseekApiKey, config.deepseekModel, buildClassifyPrompt(note))
+              await callDeepSeek(config.deepseekApiKey, config.deepseekModel, buildClassifyPrompt(note), undefined, 'inbox-classify')
             ),
             onMoved: async (from, to) => { store.deleteByPath(from); await indexer.reindex(to) },
           },

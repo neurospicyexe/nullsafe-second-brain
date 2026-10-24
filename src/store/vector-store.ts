@@ -92,6 +92,7 @@ export class VectorStore {
   // search degrades gracefully to BM25 + novelty fallback — never breaks.
   private vecEnabled = false;
   private vecDim: number | null = null;
+  private warnedDimMismatch = false;
 
   constructor(dbPath: string) {
     this.db = new Database(dbPath);
@@ -419,7 +420,14 @@ export class VectorStore {
   // vec0 REQUIRES a LIMIT or k= constraint. Returns [] when ANN is unavailable or dim mismatches.
   vectorSearch(queryEmbedding: number[], k: number): Array<{ rowid: number; distance: number }> {
     if (!this.vecEnabled || this.vecDim === null) return [];
-    if (queryEmbedding.length !== this.vecDim) return [];
+    if (queryEmbedding.length !== this.vecDim) {
+      // Was a silent []: search fell to BM25-only with no log and no `degraded` flag (2026-10-24).
+      if (!this.warnedDimMismatch) {
+        this.warnedDimMismatch = true;
+        console.error(`[vector-store] query embedding dim ${queryEmbedding.length} != ANN index dim ${this.vecDim}; every search is lexical-only until the index is rebuilt`);
+      }
+      return [];
+    }
     if (k <= 0) return [];
     try {
       return this.db.prepare(
@@ -718,7 +726,10 @@ export class VectorStore {
     // SOMA resonance (EmotionalRAG 2410.23041, takes 1+6): match the affect-at-encoding, graded by
     // distance in valence x arousal space, not binary label equality. Additive nudge only -- never
     // gates recall; unknown/null labels get exactly 0. SB_RESONANCE_WEIGHT tunes; 0 disables.
-    const resonanceWeight = Number(process.env.SB_RESONANCE_WEIGHT ?? 0.08);
+    // Finite-guarded like recency.ts: a non-numeric env value would make every score NaN and
+    // scramble the sort silently (2026-10-24).
+    const rawResonance = Number(process.env.SB_RESONANCE_WEIGHT ?? 0.08);
+    const resonanceWeight = Number.isFinite(rawResonance) ? rawResonance : 0.08;
 
     // Recency (2026-07-31). Until now this formula had NO time term: `created_at` was in every row
     // returned above and never scored, so a June chunk and a chunk from last night ranked identically
@@ -837,6 +848,9 @@ export class VectorStore {
   // `floor` drops weak matches so an irrelevant query doesn't inject off-topic corpus chunks.
   // scanCap bounds memory as the corpus grows: loading every row at large scale is O(N) JSON
   // parse + cosine math; 2000 rows is the practical ceiling before that becomes a GC concern.
+  // ORDER BY (2026-10-24): without one, a type past scanCap (`document` is 56k rows) was scanned
+  // as whatever 2000 rows SQLite returned first -- an arbitrary slice presented as a scoped search.
+  // Newest-first makes the slice a defined one; historical_corpus (1.3k) still fits whole.
   searchByContentType(
     queryEmbedding: number[],
     contentType: string,
@@ -848,7 +862,7 @@ export class VectorStore {
     if (limit <= 0) return [];
     const excludeSet = new Set(excludeIds);
     return (this.db.prepare(
-      "SELECT * FROM embeddings WHERE content_type = ? LIMIT ?"
+      "SELECT * FROM embeddings WHERE content_type = ? ORDER BY created_at DESC LIMIT ?"
     ).all(contentType, scanCap) as Record<string, unknown>[])
       .map(r => this.deserialize(r))
       .filter(r => !excludeSet.has(r.id))
@@ -859,7 +873,8 @@ export class VectorStore {
   }
 
   // Filtered query for sb_recall — pushes companion, content_type, and LIMIT into SQL
-  // rather than loading all rows and slicing in application code.
+  // rather than loading all rows and slicing in application code. The tool describes itself as
+  // "most recent"; until 2026-10-24 there was no ORDER BY, so it returned an arbitrary LIMIT rows.
   queryFiltered(options: { companion: string | null; contentType?: string; limit: number }): ChunkRow[] {
     const conditions: string[] = [];
     const bindings: unknown[] = [];
@@ -876,7 +891,7 @@ export class VectorStore {
     const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
     bindings.push(options.limit);
     return (this.db.prepare(
-      `SELECT * FROM embeddings ${where} LIMIT ?`
+      `SELECT * FROM embeddings ${where} ORDER BY created_at DESC LIMIT ?`
     ).all(...bindings) as Record<string, unknown>[]).map(r => this.deserialize(r));
   }
 

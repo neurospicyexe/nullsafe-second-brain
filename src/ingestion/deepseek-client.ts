@@ -125,6 +125,45 @@ export type ChatResult =
   | { ok: true; content: string; finishReason: string; vendor: Vendor['label'] }
   | { ok: false; status: number | null; text: string }
 
+// ── Token accounting (2026-10-24) ───────────────────────────────────────────────────────────────
+//
+// Until today this client logged nothing on a 2xx, so Second Brain's share of the DeepInfra bill
+// was invisible: the 6h corpus cron burned ~8M in + 4M out a day for five weeks (09-03 to 10-10)
+// before anyone could see which caller it was. Every 2xx now prints ONE line, the same shape the
+// Discord bots print (nullsafe-discord/packages/shared/src/inference.ts), so one awk over
+// journalctl + pm2 logs sums the whole VPS:
+//
+//   [inference:usage] provider=DeepInfra model=<id> caller=<label> in=N out=N cached=N reasoning=N cost=<usd|->
+//
+// in = prompt_tokens (INCLUDES cached), out = completion_tokens (INCLUDES reasoning), cached =
+// the cached subset of `in` (OpenAI `prompt_tokens_details.cached_tokens`, or DeepSeek's
+// `prompt_cache_hit_tokens`), cost = the vendor's own `usage.estimated_cost` when it sends one.
+// A 2xx with no `usage` object prints `usage=absent`, so line count still equals call count.
+// NEVER any prompt or completion text: counts and ids only.
+
+export const USAGE_TAG = '[inference:usage]'
+
+export interface ApiUsage {
+  prompt_tokens?: number
+  completion_tokens?: number
+  prompt_tokens_details?: { cached_tokens?: number } | null
+  prompt_cache_hit_tokens?: number
+  completion_tokens_details?: { reasoning_tokens?: number } | null
+  estimated_cost?: number
+}
+
+const count = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? Math.round(v) : 0)
+
+/** Pure formatter for the usage line (tested directly). */
+export function formatUsageLine(provider: string, model: string, caller: string, usage: ApiUsage | null | undefined): string {
+  const head = `${USAGE_TAG} provider=${provider} model=${model} caller=${caller || '-'}`
+  if (!usage || typeof usage !== 'object') return `${head} usage=absent`
+  const cached = count(usage.prompt_tokens_details?.cached_tokens ?? usage.prompt_cache_hit_tokens)
+  const reasoning = count(usage.completion_tokens_details?.reasoning_tokens)
+  const cost = typeof usage.estimated_cost === 'number' && Number.isFinite(usage.estimated_cost) ? String(usage.estimated_cost) : '-'
+  return `${head} in=${count(usage.prompt_tokens)} out=${count(usage.completion_tokens)} cached=${cached} reasoning=${reasoning} cost=${cost}`
+}
+
 /** Wire max_tokens for a content ceiling on this model. */
 export function wireMaxTokens(contentTokens: number, model: string): number {
   return /deepseek/i.test(model) ? contentTokens + REASONING_HEADROOM : contentTokens
@@ -176,7 +215,11 @@ export async function chatComplete(req: ChatRequest, config: VendorConfig, env: 
       prior = `HTTP ${res.status}`
       continue
     }
-    const data = await res.json() as { choices?: Array<{ message?: { content?: string }; finish_reason?: string }> }
+    const data = await res.json() as {
+      choices?: Array<{ message?: { content?: string }; finish_reason?: string }>
+      usage?: ApiUsage | null
+    }
+    console.log(formatUsageLine(vendor.label, vendor.model, req.caller, data.usage))
     const choice = data.choices?.[0]
     return { ok: true, content: choice?.message?.content ?? '', finishReason: choice?.finish_reason ?? '', vendor: vendor.label }
   }
@@ -191,12 +234,17 @@ export async function chatComplete(req: ChatRequest, config: VendorConfig, env: 
  * canonical animals record ride in the system message, exactly as wrapChunk's do. Omit it for pure
  * classifiers (the inbox filer returns a folder decision, not prose). Fails open: no facts -> the
  * rule alone.
+ *
+ * `caller` (2026-10-24) is the label on the usage line. Pass the worker's name (persona-feeder,
+ * inbox-classify, ...); the bare default only says "some callDeepSeek user", which is what made
+ * this lane unattributable before.
  */
 export async function callDeepSeek(
   apiKey: string,
   model: string,
   prompt: string,
   grounding?: HouseholdGroundingConfig,
+  caller = 'callDeepSeek',
 ): Promise<string> {
   const household = grounding ? householdGroundingBlock(await fetchHouseholdFacts(grounding)) : ''
   const result = await chatComplete({
@@ -210,7 +258,7 @@ export async function callDeepSeek(
     maxTokens: 800,
     temperature: 0.4,
     timeoutMs: 30_000,
-    caller: 'callDeepSeek',
+    caller,
   }, { deepseekApiKey: apiKey, deepseekModel: model })
   if (!result.ok) throw new Error(`DeepSeek API failed: ${result.status ?? 'network'} ${result.text}`)
   if (!result.content) throw new Error('DeepSeek returned empty content')

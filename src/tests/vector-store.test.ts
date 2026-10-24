@@ -250,6 +250,35 @@ describe("VectorStore.searchByContentType", () => {
     store.close();
     rmSync(dbPath, { maxRetries: 5, retryDelay: 100 });
   });
+
+  it("scans the NEWEST scanCap rows of a type, not an arbitrary slice (2026-10-24)", () => {
+    const { store, dbPath } = makeStore();
+    const q = [1, 0, 0, 0, 0, 0, 0, 0];
+    // Three equally perfect matches; only the scan window decides which survive.
+    for (const [day, name] of [["01", "old"], ["02", "mid"], ["03", "new"]] as const) {
+      store.insert(makeChunk({
+        vault_path: `rag/document/${name}`, content_type: "document", embedding: q,
+        created_at: `2026-10-${day} 00:00:00`,
+      }) as any);
+    }
+    const hits = store.searchByContentType(q, "document", 10, [], 0, /* scanCap */ 2);
+    expect(hits.map(h => h.vault_path).sort()).toEqual(["rag/document/mid", "rag/document/new"]);
+    store.close();
+    rmSync(dbPath, { maxRetries: 5, retryDelay: 100 });
+  });
+});
+
+describe("VectorStore.queryFiltered (sb_recall)", () => {
+  it("returns the most recent rows first, as the tool description promises", () => {
+    const { store, dbPath } = makeStore();
+    for (const [day, name] of [["02", "mid"], ["01", "old"], ["03", "new"]] as const) {
+      store.insert(makeChunk({ vault_path: `rag/note/${name}`, created_at: `2026-10-${day} 00:00:00` }) as any);
+    }
+    const rows = store.queryFiltered({ companion: "drevan", contentType: "note", limit: 2 });
+    expect(rows.map(r => r.vault_path)).toEqual(["rag/note/new", "rag/note/mid"]);
+    store.close();
+    rmSync(dbPath, { maxRetries: 5, retryDelay: 100 });
+  });
 });
 
 describe("VectorStore.dedupeByPathAndIndex", () => {
