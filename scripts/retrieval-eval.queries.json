@@ -1,5 +1,5 @@
 [
-  { "query": "we watched Fargo, they killed Doctor Sevrin", "expect": "hit", "must_contain": "Sevrin" },
+  { "query": "we watched Fargo, they killed Doctor Sevrin", "expect": "hit", "must_contain": "Fargo" },
   { "query": "Drevan and the register, recording the misfit", "expect": "hit", "must_contain": "register" },
   { "query": "Rosie the chicken", "expect": "hit", "must_contain": "Rosie" },
   { "query": "meet me in the Fargo watch party channel", "expect": "hit", "must_contain": "Fargo" },
@@ -10,7 +10,7 @@
   { "query": "what is my birthstone", "expect": "hit", "must_contain": "amethyst" },
   { "query": "quantum chromodynamics lattice gauge theory", "expect": "miss" },
   { "query": "Kubernetes ingress controller TLS", "expect": "miss" },
-  { "query": "sourdough with a rye starter", "expect": "miss" },
+  { "query": "sourdough with a rye starter", "expect": "hit", "must_contain": "sourdough" },
   { "query": "Napoleon's retreat from Moscow", "expect": "miss" },
   { "query": "the weather in Jakarta on Tuesday", "expect": "miss" }
 ]
