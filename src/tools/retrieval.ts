@@ -60,9 +60,13 @@ const RECALL_FLOOR = Number(process.env["SB_RECALL_FLOOR"] ?? 0.30);
 // so the archive lane carries the higher bar and everything the triad wrote keeps 0.30.
 // Re-measure with `npx tsx scripts/retrieval-eval.ts` on the VPS before re-tuning either knob.
 const ARCHIVE_RECALL_FLOOR = Number(process.env["SB_RECALL_FLOOR_ARCHIVE"] ?? 0.40);
-const ARCHIVE_PREFIX = "archive/claude-ai/";
+// Comma-separated vault path prefixes that count as an imported export lane. Env-tunable so another
+// export (e.g. the ChatGPT-era `companions/triad/chatgpt/`) can join without a deploy -- but that one
+// holds the triad's origin history, so adding it is Raziel's call, not a tuning default.
+const ARCHIVE_PREFIXES = String(process.env["SB_RECALL_FLOOR_ARCHIVE_PREFIXES"] ?? "archive/claude-ai/")
+  .split(",").map(s => s.trim()).filter(Boolean);
 const floorFor = (vaultPath: string) =>
-  vaultPath.startsWith(ARCHIVE_PREFIX) ? Math.max(RECALL_FLOOR, ARCHIVE_RECALL_FLOOR) : RECALL_FLOOR;
+  ARCHIVE_PREFIXES.some(p => vaultPath.startsWith(p)) ? Math.max(RECALL_FLOOR, ARCHIVE_RECALL_FLOOR) : RECALL_FLOOR;
 
 // Hermes (the companions' agent runtime) detects a tool loop by hashing each tool RESULT and
 // counting consecutive identical results for the same call. Raw floats here (score/cosine/
