@@ -53,6 +53,17 @@ const CORPUS_FLOOR = 0.35; // cosine; below this the query isn't really about th
 // Env-tunable so this can be adjusted from the VPS without a deploy, per "an unlisted knob is a dead knob".
 const RECALL_FLOOR = Number(process.env["SB_RECALL_FLOOR"] ?? 0.30);
 
+// R19 (b), ruled by Raziel 2026-10-26: a STRICTER floor for the imported Claude.ai export only.
+// The 10-24 eval over the 23.5k `archive/claude-ai/*` rows found 2 real false positives at 0.32-0.39 and
+// 1 real miss at 0.313, so no single floor separated them: raising the shared floor to 0.40 would have
+// cost the thinnest true companion-authored hits (birthstone 0.313). The noise lives in the archive lane,
+// so the archive lane carries the higher bar and everything the triad wrote keeps 0.30.
+// Re-measure with `npx tsx scripts/retrieval-eval.ts` on the VPS before re-tuning either knob.
+const ARCHIVE_RECALL_FLOOR = Number(process.env["SB_RECALL_FLOOR_ARCHIVE"] ?? 0.40);
+const ARCHIVE_PREFIX = "archive/claude-ai/";
+const floorFor = (vaultPath: string) =>
+  vaultPath.startsWith(ARCHIVE_PREFIX) ? Math.max(RECALL_FLOOR, ARCHIVE_RECALL_FLOOR) : RECALL_FLOOR;
+
 // Hermes (the companions' agent runtime) detects a tool loop by hashing each tool RESULT and
 // counting consecutive identical results for the same call. Raw floats here (score/cosine/
 // novelty_score) wobble at the 1e-16 level between otherwise-identical queries, so byte-identical
@@ -152,7 +163,7 @@ export function buildRetrievalTools(store: VectorStore, embedder: Embedder) {
         // Skipped when cosine is null, which is lexical mode: there the BM25 hit is a real keyword match and
         // suppressing it would take the degraded path from "half of search" to "no search". A BM25 match is
         // weak evidence, not absent evidence, and `degraded` already tells the consumer which it is.
-        if (recallMode && chunk.cosine !== null && chunk.cosine < RECALL_FLOOR) continue;
+        if (recallMode && chunk.cosine !== null && chunk.cosine < floorFor(chunk.vault_path)) continue;
         const count = countByPath.get(chunk.vault_path) ?? 0;
         if (count >= 2) continue;
         countByPath.set(chunk.vault_path, count + 1);
@@ -214,6 +225,7 @@ export function buildRetrievalTools(store: VectorStore, embedder: Embedder) {
           chunks: [],
           mode: "recall" as const,
           recall_floor: RECALL_FLOOR,
+          recall_floor_archive: ARCHIVE_RECALL_FLOOR,
           recall_note:
             `No chunk cleared the relevance floor (cosine >= ${RECALL_FLOOR}). This means nothing in the ` +
             `vault is a close match for this query -- NOT that the vault is empty and NOT that it never ` +
@@ -223,7 +235,7 @@ export function buildRetrievalTools(store: VectorStore, embedder: Embedder) {
       }
       return {
         chunks,
-        ...(recallMode ? { mode: "recall" as const, recall_floor: RECALL_FLOOR } : {}),
+        ...(recallMode ? { mode: "recall" as const, recall_floor: RECALL_FLOOR, recall_floor_archive: ARCHIVE_RECALL_FLOOR } : {}),
         // Present only when degraded, so the healthy payload is byte-identical to before.
         ...(degraded ? { degraded, degraded_note: "Embedder unavailable: keyword (BM25) results only. Semantic matches, the serendipity pool and the guaranteed corpus slot are all absent -- absence here does NOT mean absence from the vault." } : {}),
       };

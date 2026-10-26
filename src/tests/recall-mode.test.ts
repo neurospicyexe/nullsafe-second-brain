@@ -154,6 +154,29 @@ describe("sb_search recall mode -- relevance only, absolute floor, honest empty"
     expect(r.chunks).toHaveLength(10);
   });
 
+  // R19 (b), ruled 2026-10-26: the 23.5k imported Claude.ai export rows produced the false positives at
+  // 0.32-0.39 in the 10-24 eval, while companion-authored memory held the thinnest true hit (0.313). One
+  // floor could not separate them, so the archive lane gets its own, higher bar.
+  it("holds archive/claude-ai rows to the stricter archive floor and leaves other rows at the base floor", async () => {
+    const { store, live } = mocks([
+      chunk({ vault_path: "archive/claude-ai/2025-09-12-660fe411.md", id: "arch-weak", cosine: 0.35 }),
+      chunk({ vault_path: "archive/claude-ai/2026-02-22-531e9071.part3.md", id: "arch-strong", cosine: 0.45 }),
+      chunk({ vault_path: "rag/companion_journal/birthstone.md", id: "own-thin", cosine: 0.313 }),
+    ]);
+    const r = await buildRetrievalTools(store, live).sb_search({ query: "what is my birthstone", mode: "recall" }) as
+      { chunks: Array<{ id: string }>; recall_floor_archive?: number };
+    expect(r.chunks.map(c => c.id).sort()).toEqual(["arch-strong", "own-thin"]);
+    expect(r.recall_floor_archive).toBeCloseTo(0.40, 5);
+  });
+
+  it("does not apply the archive floor outside recall mode", async () => {
+    const { store, live } = mocks([
+      chunk({ vault_path: "archive/claude-ai/2025-09-12-660fe411.md", id: "arch-weak", cosine: 0.35 }),
+    ]);
+    const r = await buildRetrievalTools(store, live).sb_search({ query: "anything" }) as { chunks: Array<{ id: string }> };
+    expect(r.chunks.map(c => c.id)).toContain("arch-weak");
+  });
+
   it("leaves the default response shape untouched -- no mode, no recall keys", async () => {
     const { store, live } = mocks([chunk({ vault_path: "rag/x.md" })]);
     const r = await buildRetrievalTools(store, live).sb_search({ query: "anything" }) as Record<string, unknown>;
