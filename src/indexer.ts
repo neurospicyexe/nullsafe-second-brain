@@ -186,6 +186,10 @@ export class Indexer {
         recovered++;
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err);
+        // The vault write may still be sitting in the adapter's retry queue (Obsidian/tunnel down): that 404
+        // is "not delivered yet", not "gone". Do not spend an attempt on it, or the note would be dropped
+        // from pending_index after MAX_PENDING_ATTEMPTS and stay unsearchable once it finally lands.
+        if (/ENOENT|not found|no such file|404/i.test(reason) && this.adapter.hasPending?.(p.vault_path)) continue;
         // Still failing. Leave it queued; bump the attempt count.
         this.store.markPendingIndex(p.vault_path, p.companion, p.content_type, p.tags, reason);
 

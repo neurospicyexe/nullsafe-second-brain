@@ -28,6 +28,11 @@ export class ObsidianRestAdapter implements VaultAdapter {
   private retryTimer: NodeJS.Timeout | null = null;
   private retryIntervalMs: number;
   private maxAttempts: number;
+  // Per-path tail of the operation chain. write/delete/retry of one path run strictly one at a time, so a
+  // slow retry PUT can never land after (and clobber) a newer direct write, nor resurrect a deleted file.
+  private pathLocks = new Map<string, Promise<unknown>>();
+  // processQueue re-entrancy guard: a tick that outlives retryIntervalMs must not overlap the next one.
+  private inFlight = false;
 
   constructor(config: ObsidianRestConfig) {
     this.base = config.url.replace(/\/$/, "");
@@ -78,17 +83,19 @@ export class ObsidianRestAdapter implements VaultAdapter {
    */
   async write({ path, content, overwrite = true }: VaultWriteOptions): Promise<VaultWriteResult> {
     assertVaultRelativePath(path);
-    if (!overwrite && (await this.exists(path))) return { delivered: true };
-    try {
-      await this.putFile(path, content);
-      this.queue.prepare("DELETE FROM pending_writes WHERE path = ?").run(path);
-      return { delivered: true };
-    } catch (err) {
-      const detail = describeError(err);
-      this.enqueue(path, content, detail);
-      console.error(`[obsidian-rest] write failed, queued: ${path} | ${detail}`);
-      return { delivered: false, queued: true };
-    }
+    return this.withPathLock(path, async (): Promise<VaultWriteResult> => {
+      if (!overwrite && (await this.exists(path))) return { delivered: true };
+      try {
+        await this.putFile(path, content);
+        this.queue.prepare("DELETE FROM pending_writes WHERE path = ?").run(path);
+        return { delivered: true };
+      } catch (err) {
+        const detail = describeError(err);
+        this.enqueue(path, content, detail);
+        console.error(`[obsidian-rest] write failed, queued: ${path} | ${detail}`);
+        return { delivered: false, queued: true };
+      }
+    });
   }
 
   async read(path: string): Promise<string> {
@@ -134,7 +141,12 @@ export class ObsidianRestAdapter implements VaultAdapter {
     assertVaultRelativePath(to);
     // No native move — read + write + delete.
     const content = await this.read(from);
-    await this.write({ path: to, content, overwrite: true });
+    const result = await this.write({ path: to, content, overwrite: true });
+    // A queued destination exists only in the local queue; deleting the source now would leave the
+    // content in one fragile place. Keep the source until the destination has actually landed.
+    if (!result.delivered) {
+      throw new Error(`Obsidian REST move ${from} -> ${to}: destination write queued, source kept`);
+    }
     const res = await fetch(`${this.base}/vault/${encodeVaultPath(from)}`, {
       method: "DELETE",
       headers: { Authorization: this.headers.Authorization },
@@ -147,17 +159,19 @@ export class ObsidianRestAdapter implements VaultAdapter {
 
   async delete(path: string): Promise<void> {
     assertVaultRelativePath(path);
-    // Drop any queued write for this path first, so the retry loop can't
-    // resurrect the file after we delete it.
-    this.queue.prepare("DELETE FROM pending_writes WHERE path = ?").run(path);
-    const res = await fetch(`${this.base}/vault/${encodeVaultPath(path)}`, {
-      method: "DELETE",
-      headers: { Authorization: this.headers.Authorization },
-      signal: AbortSignal.timeout(15_000),
+    await this.withPathLock(path, async () => {
+      // Drop any queued write for this path first, so the retry loop can't resurrect the file after we
+      // delete it. The lock also waits out an in-flight retry PUT, which would otherwise land after.
+      this.queue.prepare("DELETE FROM pending_writes WHERE path = ?").run(path);
+      const res = await fetch(`${this.base}/vault/${encodeVaultPath(path)}`, {
+        method: "DELETE",
+        headers: { Authorization: this.headers.Authorization },
+        signal: AbortSignal.timeout(15_000),
+      });
+      if (!res.ok && res.status !== 404) {
+        throw new Error(`Obsidian REST DELETE ${path} failed: ${res.status}`);
+      }
     });
-    if (!res.ok && res.status !== 404) {
-      throw new Error(`Obsidian REST DELETE ${path} failed: ${res.status}`);
-    }
   }
 
   /** Stop the background retry loop and close the queue DB. */
@@ -175,7 +189,23 @@ export class ObsidianRestAdapter implements VaultAdapter {
     return row.n;
   }
 
+  /** True while a write for this path is accepted but undelivered (sitting in the retry queue). */
+  hasPending(path: string): boolean {
+    return this.queue.prepare("SELECT 1 FROM pending_writes WHERE path = ?").get(path) !== undefined;
+  }
+
   // --- internal ---
+
+  private withPathLock<T>(path: string, fn: () => Promise<T>): Promise<T> {
+    const prev = this.pathLocks.get(path) ?? Promise.resolve();
+    const run = prev.then(fn);
+    const tail = run.then(() => undefined, () => undefined);
+    this.pathLocks.set(path, tail);
+    void tail.then(() => {
+      if (this.pathLocks.get(path) === tail) this.pathLocks.delete(path);
+    });
+    return run;
+  }
 
   private async putFile(path: string, content: string): Promise<void> {
     const res = await fetch(`${this.base}/vault/${encodeVaultPath(path)}`, {
@@ -212,37 +242,52 @@ export class ObsidianRestAdapter implements VaultAdapter {
   }
 
   private async processQueue(): Promise<void> {
-    const now = Date.now();
-    const due = this.queue
-      .prepare("SELECT * FROM pending_writes WHERE next_retry_at <= ? ORDER BY enqueued_at LIMIT 25")
-      .all(now) as QueueRow[];
-
-    for (const row of due) {
-      try {
-        await this.putFile(row.path, row.content);
-        this.queue.prepare("DELETE FROM pending_writes WHERE id = ?").run(row.id);
-        console.log(`[obsidian-rest] queued write delivered: ${row.path}`);
-      } catch (err) {
-        const attempts = row.attempts + 1;
-        const message = describeError(err);
-        if (attempts >= this.maxAttempts) {
-          console.error(`[obsidian-rest] parking ${row.path} in dead_writes after ${attempts} attempts: ${message}`);
-          this.queue.transaction(() => {
-            this.queue.prepare(
-              "INSERT INTO dead_writes (path, content, attempts, last_error, enqueued_at) VALUES (?, ?, ?, ?, ?)",
-            ).run(row.path, row.content, attempts, message, (row as QueueRow & { enqueued_at?: number }).enqueued_at ?? Math.floor(Date.now() / 1000));
-            this.queue.prepare("DELETE FROM pending_writes WHERE id = ?").run(row.id);
-          })();
-          continue;
-        }
-        // Exponential backoff: base * 2^(attempts-1), capped at 1h
-        const backoff = Math.min(this.retryIntervalMs * 2 ** (attempts - 1), 3_600_000);
-        this.queue.prepare(`
-          UPDATE pending_writes
-          SET attempts = ?, next_retry_at = ?, last_error = ?
-          WHERE id = ?
-        `).run(attempts, Date.now() + backoff, message, row.id);
+    if (this.inFlight) return;
+    this.inFlight = true;
+    try {
+      const due = this.queue
+        .prepare("SELECT * FROM pending_writes WHERE next_retry_at <= ? ORDER BY enqueued_at LIMIT 25")
+        .all(Date.now()) as QueueRow[];
+      for (const stale of due) {
+        await this.withPathLock(stale.path, () => this.retryRow(stale.id));
       }
+    } finally {
+      this.inFlight = false;
+    }
+  }
+
+  /**
+   * Runs under the path lock. Re-reads the row so a newer queued write (or a delete) that landed while this
+   * retry waited its turn is what gets sent, or nothing at all. Every mutation below is also tied to the
+   * exact content sent, as a second line of defence.
+   */
+  private async retryRow(id: number): Promise<void> {
+    const row = this.queue.prepare("SELECT * FROM pending_writes WHERE id = ?").get(id) as QueueRow | undefined;
+    if (!row) return;
+    try {
+      await this.putFile(row.path, row.content);
+      this.queue.prepare("DELETE FROM pending_writes WHERE id = ? AND content = ?").run(row.id, row.content);
+      console.log(`[obsidian-rest] queued write delivered: ${row.path}`);
+    } catch (err) {
+      const attempts = row.attempts + 1;
+      const message = describeError(err);
+      if (attempts >= this.maxAttempts) {
+        console.error(`[obsidian-rest] parking ${row.path} in dead_writes after ${attempts} attempts: ${message}`);
+        this.queue.transaction(() => {
+          this.queue.prepare(
+            "INSERT INTO dead_writes (path, content, attempts, last_error, enqueued_at) VALUES (?, ?, ?, ?, ?)",
+          ).run(row.path, row.content, attempts, message, (row as QueueRow & { enqueued_at?: number }).enqueued_at ?? Math.floor(Date.now() / 1000));
+          this.queue.prepare("DELETE FROM pending_writes WHERE id = ? AND content = ?").run(row.id, row.content);
+        })();
+        return;
+      }
+      // Exponential backoff: base * 2^(attempts-1), capped at 1h
+      const backoff = Math.min(this.retryIntervalMs * 2 ** (attempts - 1), 3_600_000);
+      this.queue.prepare(`
+        UPDATE pending_writes
+        SET attempts = ?, next_retry_at = ?, last_error = ?
+        WHERE id = ? AND content = ?
+      `).run(attempts, Date.now() + backoff, message, row.id, row.content);
     }
   }
 }

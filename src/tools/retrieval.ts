@@ -51,7 +51,18 @@ const CORPUS_FLOOR = 0.35; // cosine; below this the query isn't really about th
 // rollback work. The label was wrong, not the retrieval. Beware of that when re-tuning.
 //
 // Env-tunable so this can be adjusted from the VPS without a deploy, per "an unlisted knob is a dead knob".
-const RECALL_FLOOR = Number(process.env["SB_RECALL_FLOOR"] ?? 0.30);
+// A malformed value makes Number() return NaN, and every comparison against NaN is false, which would
+// silently disable the floor. Fall back to the default loudly instead.
+export function parseFloor(raw: string | undefined, fallback: number): number {
+  if (raw === undefined || raw.trim() === "") return fallback;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) {
+    console.error(`[retrieval] ignoring non-numeric recall floor ${JSON.stringify(raw)}; using ${fallback}`);
+    return fallback;
+  }
+  return n;
+}
+const RECALL_FLOOR = parseFloor(process.env["SB_RECALL_FLOOR"], 0.30);
 
 // R19 (b), ruled by Raziel 2026-10-26: a STRICTER floor for the imported Claude.ai export only.
 // The 10-24 eval over the 23.5k `archive/claude-ai/*` rows found 2 real false positives at 0.32-0.39 and
@@ -59,7 +70,7 @@ const RECALL_FLOOR = Number(process.env["SB_RECALL_FLOOR"] ?? 0.30);
 // cost the thinnest true companion-authored hits (birthstone 0.313). The noise lives in the archive lane,
 // so the archive lane carries the higher bar and everything the triad wrote keeps 0.30.
 // Re-measure with `npx tsx scripts/retrieval-eval.ts` on the VPS before re-tuning either knob.
-const ARCHIVE_RECALL_FLOOR = Number(process.env["SB_RECALL_FLOOR_ARCHIVE"] ?? 0.40);
+const ARCHIVE_RECALL_FLOOR = parseFloor(process.env["SB_RECALL_FLOOR_ARCHIVE"], 0.40);
 // Comma-separated vault path prefixes that count as an imported export lane. Env-tunable so another
 // export (e.g. the ChatGPT-era `companions/triad/chatgpt/`) can join without a deploy -- but that one
 // holds the triad's origin history, so adding it is Raziel's call, not a tuning default.
@@ -231,7 +242,7 @@ export function buildRetrievalTools(store: VectorStore, embedder: Embedder) {
           recall_floor: RECALL_FLOOR,
           recall_floor_archive: ARCHIVE_RECALL_FLOOR,
           recall_note:
-            `No chunk cleared the relevance floor (cosine >= ${RECALL_FLOOR}). This means nothing in the ` +
+            `No chunk cleared the relevance floor (cosine >= ${RECALL_FLOOR}; ${ARCHIVE_RECALL_FLOOR} for imported archive paths). This means nothing in the ` +
             `vault is a close match for this query -- NOT that the vault is empty and NOT that it never ` +
             `happened. It may simply never have been written down. Say you do not have it; do not guess.`,
           ...(degraded ? { degraded } : {}),

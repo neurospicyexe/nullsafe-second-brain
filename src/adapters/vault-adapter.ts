@@ -20,4 +20,6 @@ export interface VaultAdapter {
   delete(path: string): Promise<void>;
   /** Number of accepted-but-undelivered writes. Only adapters with a retry queue implement it. */
   pendingCount?(): number;
+  /** True while a write for this path is accepted but not yet delivered. Only adapters with a retry queue implement it. */
+  hasPending?(path: string): boolean;
 }
