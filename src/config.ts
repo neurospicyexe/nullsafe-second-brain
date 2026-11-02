@@ -20,6 +20,10 @@ const configSchema = z.object({
   vault: z.object({
     adapter: z.enum(["filesystem", "obsidian-rest"]).default("filesystem"),
     path: z.string().default(""),
+    // "couchdb": with adapter obsidian-rest AND a couchdb block, reads come from LiveSync's CouchDB
+    // first (works with the PC off) and writes still go through Obsidian REST. See
+    // src/adapters/read-through-adapter.ts. Default "primary" keeps every read on the write adapter.
+    read_from: z.enum(["primary", "couchdb"]).default("primary"),
   }).prefault({}),
   obsidian_rest: z.object({ url: z.string(), api_key: z.string(), max_attempts: z.number().int().positive().optional() }).optional(),
   halseth: z.object({ url: z.string(), secret: z.string() }),

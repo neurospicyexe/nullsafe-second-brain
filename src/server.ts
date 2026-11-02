@@ -7,6 +7,7 @@ import type { SecondBrainConfig } from "./config.js";
 import { FilesystemAdapter } from "./adapters/filesystem-adapter.js";
 import { CouchDBAdapter } from "./adapters/couchdb-adapter.js";
 import { ObsidianRestAdapter } from "./adapters/obsidian-rest-adapter.js";
+import { ReadThroughAdapter } from "./adapters/read-through-adapter.js";
 import type { VaultAdapter } from "./adapters/vault-adapter.js";
 import { VectorStore } from "./store/vector-store.js";
 import { OpenAIEmbedder } from "./embeddings/openai-embedder.js";
@@ -35,11 +36,21 @@ export function createServer(config: SecondBrainConfig) {
     if (!config.obsidian_rest) {
       throw new Error('vault.adapter is "obsidian-rest" but obsidian_rest config is missing.');
     }
-    adapter = new ObsidianRestAdapter({
+    const rest = new ObsidianRestAdapter({
       url: config.obsidian_rest.url,
       apiKey: config.obsidian_rest.api_key,
       maxAttempts: config.obsidian_rest.max_attempts,
     });
+    if (config.vault.read_from === "couchdb") {
+      if (!config.couchdb) {
+        throw new Error('vault.read_from is "couchdb" but the couchdb config block is missing.');
+      }
+      // Reads from LiveSync's CouchDB first, so full-note reads work with the PC off; writes stay REST.
+      adapter = new ReadThroughAdapter(rest, new CouchDBAdapter(config.couchdb));
+      console.error("[startup] vault reads: couchdb first, obsidian-rest fallback; writes: obsidian-rest");
+    } else {
+      adapter = rest;
+    }
   } else if (config.couchdb) {
     adapter = new CouchDBAdapter(config.couchdb);
   } else {

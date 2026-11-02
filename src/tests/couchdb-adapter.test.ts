@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { CouchDBAdapter } from "../adapters/couchdb-adapter.js";
+import { CouchDBAdapter, livesyncDocId } from "../adapters/couchdb-adapter.js";
 
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
@@ -143,44 +143,100 @@ describe("CouchDBAdapter.read", () => {
 });
 
 describe("CouchDBAdapter.list", () => {
-  it("excludes chunk docs, version doc, and deleted files", async () => {
+  it("root listing uses _find and drops deleted docs, returning original-case paths", async () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,
       json: async () => ({
-        rows: [
-          { id: "h:abc", doc: { type: "leaf", deleted: false } },
-          { id: "obsydian_livesync_version", doc: { type: "versioninfo" } },
-          { id: "companions/drevan/note.md", doc: { type: "plain", deleted: false } },
-          { id: "raziel/daily/old.md", doc: { type: "plain", deleted: true } },
-          { id: "companions/cypher/audit.md", doc: { type: "plain", deleted: false } },
+        docs: [
+          { _id: "companions/drevan/note.md", path: "Companions/drevan/note.md", type: "plain" },
+          { _id: "raziel/daily/old.md", path: "raziel/daily/old.md", type: "plain", deleted: true },
+          { _id: "companions/cypher/audit.md", path: "Companions/cypher/audit.md", type: "plain" },
         ],
       }),
     });
 
     const result = await adapter.list();
-    expect(result).toEqual(["companions/drevan/note.md", "companions/cypher/audit.md"]);
+    expect(result).toEqual(["Companions/drevan/note.md", "Companions/cypher/audit.md"]);
+    const [url, init] = mockFetch.mock.calls[0];
+    expect(url).toBe("http://localhost:5984/test-vault/_find");
+    expect(JSON.parse(init.body).selector.type.$in).toEqual(["plain", "newnote"]);
   });
 
-  it("filters by directory prefix", async () => {
+  it("a folder listing is a lowercase key-range read that never touches chunks", async () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,
       json: async () => ({
         rows: [
-          { id: "companions/drevan/note.md", doc: { type: "plain", deleted: false } },
-          { id: "raziel/daily/log.md", doc: { type: "plain", deleted: false } },
+          { id: "companions/drevan/note.md", doc: { _id: "companions/drevan/note.md", path: "Companions/drevan/note.md", type: "plain" } },
         ],
       }),
     });
 
-    const result = await adapter.list("companions");
-    expect(result).toEqual(["companions/drevan/note.md"]);
+    const result = await adapter.list("Companions");
+    expect(result).toEqual(["Companions/drevan/note.md"]);
+    const url = new URL(mockFetch.mock.calls[0][0]);
+    expect(url.pathname).toBe("/test-vault/_all_docs");
+    expect(JSON.parse(url.searchParams.get("startkey")!)).toBe("companions/");
+    expect(JSON.parse(url.searchParams.get("endkey")!)).toBe("companions/￰");
   });
 
   it("accepts an empty string explicitly (vault root)", async () => {
+    mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({ docs: [] }) });
+    await expect(adapter.list("")).resolves.toEqual([]);
+  });
+
+  it("listChildren returns one level in Obsidian REST shape", async () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,
-      json: async () => ({ rows: [] }),
+      json: async () => ({
+        rows: [
+          { id: "raziel/a.md", doc: { _id: "raziel/a.md", path: "raziel/a.md", type: "plain" } },
+          { id: "raziel/sessions/x.md", doc: { _id: "raziel/sessions/x.md", path: "raziel/sessions/x.md", type: "plain" } },
+          { id: "raziel/sessions/y.md", doc: { _id: "raziel/sessions/y.md", path: "raziel/sessions/y.md", type: "plain" } },
+        ],
+      }),
     });
-    await expect(adapter.list("")).resolves.toEqual([]);
+    await expect(adapter.listChildren("raziel")).resolves.toEqual(["raziel/a.md", "raziel/sessions/"]);
+  });
+});
+
+describe("LiveSync document ids", () => {
+  it("lowercases, and prefixes '/' for a leading underscore", () => {
+    expect(livesyncDocId("Companions/Drevan/Note.md")).toBe("companions/drevan/note.md");
+    expect(livesyncDocId("_archive/2026-11-01/X.md")).toBe("/_archive/2026-11-01/x.md");
+    expect(livesyncDocId("raziel/_inner.md")).toBe("raziel/_inner.md");
+  });
+
+  it("read looks the note up by its LiveSync id", async () => {
+    mockFetch
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ _id: "/_archive/x.md", path: "_archive/X.md", type: "plain", children: ["h:1"] }) })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ _id: "h:1", data: "hello" }) });
+    await expect(adapter.read("_archive/X.md")).resolves.toBe("hello");
+    expect(mockFetch.mock.calls[0][0]).toBe("http://localhost:5984/test-vault/" + encodeURIComponent("/_archive/x.md"));
+  });
+
+  it("falls back to the raw path for docs the legacy write() created", async () => {
+    mockFetch
+      .mockResolvedValueOnce({ ok: false, status: 404 })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ _id: "Legacy/N.md", path: "Legacy/N.md", type: "plain", children: ["h:2"] }) })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ _id: "h:2", data: "old" }) });
+    await expect(adapter.read("Legacy/N.md")).resolves.toBe("old");
+  });
+
+  it("uses inline eden chunks and decodes newnote base64", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true, status: 200,
+      json: async () => ({
+        _id: "b.md", path: "b.md", type: "newnote", children: ["h:e"],
+        eden: { "h:e": { data: Buffer.from("café", "utf-8").toString("base64") } },
+      }),
+    });
+    await expect(adapter.read("b.md")).resolves.toBe("café");
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats _deleted and non-note docs as absent", async () => {
+    mockFetch.mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ _id: "x.md", _deleted: true, type: "plain" }) });
+    expect(await adapter.exists("x.md")).toBe(false);
   });
 });
