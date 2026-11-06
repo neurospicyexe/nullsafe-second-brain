@@ -95,7 +95,7 @@ export function buildRetrievalTools(store: VectorStore, embedder: Embedder) {
     // mood: caller's current emotional state (e.g. companion current_mood). In pool 1, chunks get a
     // graded additive resonance boost by emotion-space distance (valence x arousal) to that mood --
     // closer affect ranks higher. See store/emotion-space.ts. Never gates recall.
-    async sb_search(args: { query: string; limit?: number; content_type?: string; mood?: string; mode?: string }) {
+    async sb_search(args: { query: string; limit?: number; content_type?: string; mood?: string; mode?: string; path_prefixes?: string[] }) {
       const limit = args.limit ?? 10;
       // Relevance-only shape for factual conversational recall. See RECALL_FLOOR above.
       const recallMode = args.mode === "recall";
@@ -168,7 +168,8 @@ export function buildRetrievalTools(store: VectorStore, embedder: Embedder) {
       const pool3Size = recallMode ? 0 : Math.max(0, limit - pool1Size - pool2Size);
 
       // Pool 1 (70%, or 100% in recall mode): core relevance -- hybrid cosine + BM25
-      const p1Candidates = store.hybridSearch(queryEmbedding, args.query, pool1Size * 5, args.mood);
+      const prefixes = (args.path_prefixes ?? []).map(p => p.trim().toLowerCase()).filter(Boolean);
+      const p1Candidates = store.hybridSearch(queryEmbedding, args.query, pool1Size * 5, args.mood, prefixes.length ? prefixes : undefined);
       const countByPath = new Map<string, number>();
       const pool1: typeof p1Candidates = [];
       for (const chunk of p1Candidates) {

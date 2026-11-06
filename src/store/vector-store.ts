@@ -660,7 +660,32 @@ export class VectorStore {
    * In lexical mode: no ANN candidates, no cosine term (normV contributes 0), BM25 carries the ranking, and
    * the recency / resonance / metamemory nudges still apply because none of them need a query vector.
    */
-  hybridSearch(queryEmbedding: number[] | null, queryText: string, limit: number, mood?: string): Array<ChunkRow & { score: number; cosine: number | null }> {
+  hybridSearch(queryEmbedding: number[] | null, queryText: string, limit: number, mood?: string, pathPrefixes?: string[]): Array<ChunkRow & { score: number; cosine: number | null }> {
+    // SCOPED (2026-11-06, Rock's vault fetch): when the caller names folders, score EVERY chunk under them
+    // instead of the global BM25/ANN candidate set. The global set is dominated by the big folders (archive
+    // alone is ~477 notes), so a small room's notes never reach the top N and a post-hoc filter finds nothing.
+    // Prefixes compare against lower(vault_path). The scoped set is capped so a broad prefix cannot load the
+    // whole store.
+    if (pathPrefixes && pathPrefixes.length > 0) {
+      const like = pathPrefixes.map(() => "lower(vault_path) LIKE ? ESCAPE '\\'").join(" OR ");
+      const likeArgs = pathPrefixes.map(p => p.toLowerCase().replace(/[\\%_]/g, m => "\\" + m) + "%");
+      const scopedRows = this.db.prepare(
+        `SELECT rowid, * FROM embeddings WHERE (${like}) AND ${NOT_COMPANION_SPEECH_SQL} LIMIT 3000`
+      ).all(...likeArgs) as Record<string, unknown>[];
+      if (scopedRows.length === 0) return [];
+      const scopedBm25 = new Map<number, number>();
+      const ftsScoped = this.buildFtsMatch(queryText);
+      if (ftsScoped) {
+        const ftsRows = this.db.prepare(
+          `SELECT rowid, bm25(embeddings_fts) AS bm25 FROM embeddings_fts
+             WHERE embeddings_fts MATCH ? AND rowid IN (SELECT rowid FROM embeddings WHERE ${like}) ORDER BY bm25 LIMIT 500`
+        ).all(ftsScoped, ...likeArgs) as { rowid: number; bm25: number }[];
+        for (const r of ftsRows) scopedBm25.set(r.rowid, -r.bm25);
+      }
+      // Lexical mode with no keyword hit in scope: honest empty, same rule as the unscoped path.
+      if (!queryEmbedding && scopedBm25.size === 0) return [];
+      return this.rankCandidates(scopedRows, scopedBm25, queryEmbedding, limit, mood);
+    }
     // Step 1: BM25 candidates via FTS5 index — sub-millisecond, avoids full table scan.
     // OR-join the query tokens (with prefix) rather than the default implicit-AND phrase match:
     // a natural-language query no longer needs EVERY token present in one chunk to surface
@@ -705,6 +730,11 @@ export class VectorStore {
     }
 
     if (rows.length === 0) return [];
+    return this.rankCandidates(rows, bm25Scores, queryEmbedding, limit, mood);
+  }
+
+  /** Step 3 of hybridSearch, shared with the scoped path: cosine + BM25 + nudges over a candidate row set. */
+  private rankCandidates(rows: Record<string, unknown>[], bm25Scores: Map<number, number>, queryEmbedding: number[] | null, limit: number, mood?: string): Array<ChunkRow & { score: number; cosine: number | null }> {
 
     // Step 3: Cosine-score candidates and combine with BM25.
     const candidates = rows.map(r => ({ rowid: r.rowid as number, chunk: this.deserialize(r) }));

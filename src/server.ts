@@ -153,7 +153,11 @@ export function createServer(config: SecondBrainConfig) {
       // `mode` MUST be declared here or the MCP layer strips it before sb_search ever sees it -- the
       // implementation reading args.mode is not enough on its own (2026-08-10: recall mode was fully built,
       // deployed, and silently inert for exactly this reason; pool 2 kept appearing and recall_floor never did).
-      { query: z.string().max(10_000), limit: z.number().optional(), content_type: z.string().optional(), mood: z.string().max(60).optional(), mode: z.enum(["recall"]).optional() },
+      { query: z.string().max(10_000), limit: z.number().optional(), content_type: z.string().optional(), mood: z.string().max(60).optional(), mode: z.enum(["recall"]).optional(),
+        // 2026-11-06 (Rock's vault fetch): restrict relevance (pool 1) to vault paths under these folders,
+        // case-insensitive. Scored over the WHOLE scoped set, so 477 archive notes cannot crowd out a 26-note
+        // room. Declared here for the same reason as `mode` above.
+        path_prefixes: z.array(z.string().min(1).max(200)).max(20).optional() },
       (args) => retrieval.sb_search(args).then(ok));
 
     server.tool("sb_feedback",
